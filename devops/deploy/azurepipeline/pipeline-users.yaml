@@ -149,12 +149,12 @@ jobs:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl delete deployment $(SERVICE_NAME) -n adp --ignore-not-found && kubectl apply -f users.yaml" \
+          --command "kubectl delete deployment $(SERVICE_NAME) -n adp-preprod --ignore-not-found && kubectl apply -f users.yaml" \
           --file $(Pipeline.Workspace)/devops/k8s/backend/users.yaml || true
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl rollout status deployment/$(SERVICE_NAME) -n adp --timeout=300s || echo ROLLOUT_TIMED_OUT" || true
+          --command "kubectl rollout status deployment/$(SERVICE_NAME) -n adp-preprod --timeout=300s || echo ROLLOUT_TIMED_OUT" || true
         echo "✅ $(SERVICE_NAME):$(Build.BuildId) deployed to Production"
 
   - task: AzureCLI@2
@@ -170,5 +170,5 @@ jobs:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "NOT_READY=\$(kubectl get pods -n adp -l app=$(SERVICE_NAME) --no-headers | grep -v '1/1' | grep -v '^\$' | wc -l); if [ \"\$NOT_READY\" -ne 0 ]; then echo ERROR: pods not ready; kubectl get pods -n adp -l app=$(SERVICE_NAME); kubectl describe pods -n adp -l app=$(SERVICE_NAME); exit 1; fi; echo OK: $(SERVICE_NAME) is healthy; kubectl get pods -n adp -l app=$(SERVICE_NAME)" || true
+          --command "NOT_READY=\$(kubectl get pods -n adp-preprod -l app=$(SERVICE_NAME) --no-headers | grep -v '1/1' | grep -v '^\$' | wc -l); if [ \"\$NOT_READY\" -ne 0 ]; then echo ERROR: pods not ready; kubectl get pods -n adp-preprod -l app=$(SERVICE_NAME); kubectl describe pods -n adp-preprod -l app=$(SERVICE_NAME); exit 1; fi; echo OK: $(SERVICE_NAME) is healthy; kubectl get pods -n adp-preprod -l app=$(SERVICE_NAME)" || true
         echo "✅ $(SERVICE_NAME) is healthy in Production!"
