@@ -323,17 +323,17 @@ steps:
         echo "########## ALL PODS ##########"
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl get pods -n adp -o wide" || true
+          --command "kubectl get pods -n adp-preprod -o wide" || true
 
         echo "########## FRONTEND — image + env vars ##########"
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl describe deployment adp-frontend -n adp | grep -A5 'Image:\|Environment:\|INTERNAL_API'" || true
+          --command "kubectl describe deployment adp-frontend -n adp-preprod | grep -A5 'Image:\|Environment:\|INTERNAL_API'" || true
 
         echo "########## AUTHENTICATION — errors + Redis + refresh ##########"
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-authentication -n adp --tail=200 2>&1 | grep -iE 'ERROR|Exception|redis|refresh|500|NullPointer|Connection|timeout|expired|invalid' | grep -v 'HikariPool\|Eureka\|HeartBeat' | tail -40 || echo 'No auth errors'" || true
+          --command "kubectl logs deployment/adp-authentication -n adp-preprod --tail=200 2>&1 | grep -iE 'ERROR|Exception|redis|refresh|500|NullPointer|Connection|timeout|expired|invalid' | grep -v 'HikariPool\|Eureka\|HeartBeat' | tail -40 || echo 'No auth errors'" || true
   - task: AzureCLI@2
     displayName: 'Orders logs — recent errors + cart state + MongoDB orders (set ORDERS_LOGS=true)'
     condition: eq('${{ parameters.ORDERS_LOGS }}', 'true')
@@ -346,9 +346,9 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            ORDERS_POD=\$(kubectl get pod -n adp -l app=adp-orders -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-            ORDERS_POD2=\$(kubectl get pod -n adp -l app=adp-orders -o jsonpath='{.items[1].metadata.name}' 2>/dev/null)
-            INV_POD=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            ORDERS_POD=\$(kubectl get pod -n adp-preprod -l app=adp-orders -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            ORDERS_POD2=\$(kubectl get pod -n adp-preprod -l app=adp-orders -o jsonpath='{.items[1].metadata.name}' 2>/dev/null)
+            INV_POD=\$(kubectl get pod -n adp-preprod -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
             if [ -z \"\$ORDERS_POD\" ]; then echo 'ERROR: no orders pod found'; exit 1; fi
             echo \"Orders pod 1: \$ORDERS_POD\"
             echo \"Orders pod 2: \$ORDERS_POD2\"
@@ -356,13 +356,13 @@ steps:
 
             echo ''
             echo '=== Orders pod 1 env — service URLs (Eureka bypass check) ==='
-            kubectl exec -n adp \$ORDERS_POD -- env 2>/dev/null \
+            kubectl exec -n adp-preprod \$ORDERS_POD -- env 2>/dev/null \
               | grep -iE 'INVENTORY_SERVICE_URL|NEGOTIATION_SERVICE_URL|USERS_SERVICE_URL' \
               || echo '(direct service URLs not set — Eureka still in use)'
 
             echo ''
             echo '=== Orders logs pod 1 — recent errors + place-order flow ==='
-            kubectl logs \$ORDERS_POD -n adp --tail=300 2>/dev/null \
+            kubectl logs \$ORDERS_POD -n adp-preprod --tail=300 2>/dev/null \
               | grep -iE 'ERROR|WARN|placeOrder|processCart|cartId|negotiation|vehicle|clearCart|buildOrder|order.*saved|Failed|exception' \
               | grep -v 'HikariPool\|Eureka\|HeartBeat\|ConfigCluster' \
               | tail -60 || echo '(no matching log lines)'
@@ -370,7 +370,7 @@ steps:
             echo ''
             echo '=== Orders logs pod 2 — recent errors ==='
             if [ -n \"\$ORDERS_POD2\" ]; then
-              kubectl logs \$ORDERS_POD2 -n adp --tail=300 2>/dev/null \
+              kubectl logs \$ORDERS_POD2 -n adp-preprod --tail=300 2>/dev/null \
                 | grep -iE 'ERROR|WARN|placeOrder|processCart|cartId|negotiation|vehicle|clearCart|buildOrder|Failed|exception' \
                 | grep -v 'HikariPool\|Eureka\|HeartBeat\|ConfigCluster' \
                 | tail -60 || echo '(no matching log lines)'
@@ -378,21 +378,21 @@ steps:
 
             echo ''
             echo '=== Active carts in inventory ==='
-            kubectl exec -n adp \$INV_POD -- wget -qO- \
+            kubectl exec -n adp-preprod \$INV_POD -- wget -qO- \
               'http://localhost:8084/api/v1/inventory/v2/getAllCarts?page=0&size=10' 2>&1 \
               | tr ',' '\n' | grep -iE 'cartId|negotiationId|vehicleId|status' | head -40 \
               || echo '(endpoint not available)'
 
             echo ''
             echo '=== Inventory logs — cart/order activity ==='
-            kubectl logs \$INV_POD -n adp --tail=200 2>/dev/null \
+            kubectl logs \$INV_POD -n adp-preprod --tail=200 2>/dev/null \
               | grep -iE 'cart|order|sold|locked|placeOrder|clearCart|updateStatus|ERROR' \
               | grep -v 'HikariPool\|Eureka\|HeartBeat\|ConfigCluster' \
               | tail -40 || echo '(no matching log lines)'
 
             echo ''
             echo '=== Orders-to-inventory connectivity test ==='
-            kubectl exec -n adp \$ORDERS_POD -- wget -qO- \
+            kubectl exec -n adp-preprod \$ORDERS_POD -- wget -qO- \
               --timeout=5 http://adp-inventory-service:8084/actuator/health 2>&1 \
               | head -3 || echo '(connectivity test failed)'
           " || true
@@ -419,7 +419,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl apply -f inventory.yaml -n adp" \
+          --command "kubectl apply -f inventory.yaml -n adp-preprod" \
           --file $(Pipeline.Workspace)/devops/k8s/backend/inventory.yaml
 
         echo ""
@@ -427,7 +427,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl rollout restart deployment/adp-inventory -n adp && kubectl rollout status deployment/adp-inventory -n adp --timeout=300s"
+          --command "kubectl rollout restart deployment/adp-inventory -n adp-preprod && kubectl rollout status deployment/adp-inventory -n adp-preprod --timeout=300s"
 
         echo ""
         echo "=== Verify env vars on new pod ==="
@@ -435,9 +435,9 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            INV_POD=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            INV_POD=\$(kubectl get pod -n adp-preprod -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
             echo \"Pod: \$INV_POD\"
-            kubectl exec -n adp \$INV_POD -- env 2>/dev/null \
+            kubectl exec -n adp-preprod \$INV_POD -- env 2>/dev/null \
               | grep -E 'REDIS_HOST|REDIS_PORT|REDIS_SSL|USERS_SERVICE_URL|CHAT_SERVICE_URL|JAVA_OPTS' \
               || echo '(could not read env — pod may still be starting)'
           " || true
@@ -474,7 +474,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl apply -f chat.yaml -n adp" \
+          --command "kubectl apply -f chat.yaml -n adp-preprod" \
           --file $(Pipeline.Workspace)/devops/k8s/backend/chat.yaml
 
         echo ""
@@ -482,7 +482,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl rollout restart deployment/adp-chat -n adp && kubectl rollout status deployment/adp-chat -n adp --timeout=300s"
+          --command "kubectl rollout restart deployment/adp-chat -n adp-preprod && kubectl rollout status deployment/adp-chat -n adp-preprod --timeout=300s"
 
         echo ""
         echo "=== Verify env vars on new pod ==="
@@ -490,9 +490,9 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            CHAT_POD=\$(kubectl get pod -n adp -l app=adp-chat -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            CHAT_POD=\$(kubectl get pod -n adp-preprod -l app=adp-chat -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
             echo \"Pod: \$CHAT_POD\"
-            kubectl exec -n adp \$CHAT_POD -- env 2>/dev/null \
+            kubectl exec -n adp-preprod \$CHAT_POD -- env 2>/dev/null \
               | grep -E 'USERS_SERVICE_URL|INVENTORY_SERVICE_URL' \
               || echo '(could not read env — pod may still be starting)'
           " || true
@@ -515,8 +515,8 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-only-gateway-to-inventory\n  namespace: adp\nspec:\n  podSelector:\n    matchLabels:\n      app: adp-inventory\n  policyTypes:\n    - Ingress\n  ingress:\n    - from:\n        - podSelector:\n            matchLabels:\n              app: adp-authentication\n        - podSelector:\n            matchLabels:\n              app: adp-orders\n        - podSelector:\n            matchLabels:\n              app: adp-chat\n        - podSelector:\n            matchLabels:\n              app: adp-analytics\n      ports:\n        - protocol: TCP\n          port: 8084\n' | kubectl apply -f -
-            printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-only-gateway-to-users\n  namespace: adp\nspec:\n  podSelector:\n    matchLabels:\n      app: adp-users\n  policyTypes:\n    - Ingress\n  ingress:\n    - from:\n        - podSelector:\n            matchLabels:\n              app: adp-authentication\n        - podSelector:\n            matchLabels:\n              app: adp-inventory\n        - podSelector:\n            matchLabels:\n              app: adp-orders\n        - podSelector:\n            matchLabels:\n              app: adp-chat\n        - podSelector:\n            matchLabels:\n              app: adp-analytics\n      ports:\n        - protocol: TCP\n          port: 8087\n' | kubectl apply -f -
+            printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-only-gateway-to-inventory\n  namespace: adp-preprod\nspec:\n  podSelector:\n    matchLabels:\n      app: adp-inventory\n  policyTypes:\n    - Ingress\n  ingress:\n    - from:\n        - podSelector:\n            matchLabels:\n              app: adp-authentication\n        - podSelector:\n            matchLabels:\n              app: adp-orders\n        - podSelector:\n            matchLabels:\n              app: adp-chat\n        - podSelector:\n            matchLabels:\n              app: adp-analytics\n      ports:\n        - protocol: TCP\n          port: 8084\n' | kubectl apply -f -
+            printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-only-gateway-to-users\n  namespace: adp-preprod\nspec:\n  podSelector:\n    matchLabels:\n      app: adp-users\n  policyTypes:\n    - Ingress\n  ingress:\n    - from:\n        - podSelector:\n            matchLabels:\n              app: adp-authentication\n        - podSelector:\n            matchLabels:\n              app: adp-inventory\n        - podSelector:\n            matchLabels:\n              app: adp-orders\n        - podSelector:\n            matchLabels:\n              app: adp-chat\n        - podSelector:\n            matchLabels:\n              app: adp-analytics\n      ports:\n        - protocol: TCP\n          port: 8087\n' | kubectl apply -f -
           "
 
         echo ""
@@ -526,9 +526,9 @@ steps:
           --name $(CLUSTER_NAME) \
           --command "
             echo '--- allow-only-gateway-to-inventory: allowed source apps ---'
-            kubectl get networkpolicy allow-only-gateway-to-inventory -n adp -o jsonpath='{range .spec.ingress[0].from[*]}{.podSelector.matchLabels.app}{\"\n\"}{end}'
+            kubectl get networkpolicy allow-only-gateway-to-inventory -n adp-preprod -o jsonpath='{range .spec.ingress[0].from[*]}{.podSelector.matchLabels.app}{\"\n\"}{end}'
             echo '--- allow-only-gateway-to-users: allowed source apps ---'
-            kubectl get networkpolicy allow-only-gateway-to-users -n adp -o jsonpath='{range .spec.ingress[0].from[*]}{.podSelector.matchLabels.app}{\"\n\"}{end}'
+            kubectl get networkpolicy allow-only-gateway-to-users -n adp-preprod -o jsonpath='{range .spec.ingress[0].from[*]}{.podSelector.matchLabels.app}{\"\n\"}{end}'
           "
 
         echo ""
@@ -557,11 +557,11 @@ steps:
           --name $(CLUSTER_NAME) \
           --command "
             for ING in adp-ingress adp-ingress-private; do
-              kubectl get ingress \$ING -n adp >/dev/null 2>&1 || { echo \"\$ING: not found, skipping\"; continue; }
-              if kubectl get ingress \$ING -n adp -o jsonpath='{.spec.rules[*].http.paths[*].path}' | grep -q '/statemachine'; then
+              kubectl get ingress \$ING -n adp-preprod >/dev/null 2>&1 || { echo \"\$ING: not found, skipping\"; continue; }
+              if kubectl get ingress \$ING -n adp-preprod -o jsonpath='{.spec.rules[*].http.paths[*].path}' | grep -q '/statemachine'; then
                 echo \"\$ING: /statemachine already present\"
               else
-                kubectl patch ingress \$ING -n adp --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/rules/0/http/paths/-\",\"value\":{\"path\":\"/statemachine\",\"pathType\":\"Prefix\",\"backend\":{\"service\":{\"name\":\"adp-authentication\",\"port\":{\"number\":8080}}}}}]' && echo \"\$ING: /statemachine added\" || echo \"\$ING: patch failed\"
+                kubectl patch ingress \$ING -n adp-preprod --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/rules/0/http/paths/-\",\"value\":{\"path\":\"/statemachine\",\"pathType\":\"Prefix\",\"backend\":{\"service\":{\"name\":\"adp-authentication\",\"port\":{\"number\":8080}}}}}]' && echo \"\$ING: /statemachine added\" || echo \"\$ING: patch failed\"
               fi
             done
           "
@@ -571,7 +571,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl get ingress adp-ingress -n adp -o jsonpath='{range .spec.rules[*].http.paths[*]}{.path}{\" -> \"}{.backend.service.name}{\"\n\"}{end}'"
+          --command "kubectl get ingress adp-ingress -n adp-preprod -o jsonpath='{range .spec.rules[*].http.paths[*]}{.path}{\" -> \"}{.backend.service.name}{\"\n\"}{end}'"
 
         echo ""
         echo "✅ Ingress applied. The list above must include '/statemachine -> adp-authentication'."
@@ -595,7 +595,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl rollout restart deployment/adp-frontend -n adp && kubectl rollout status deployment/adp-frontend -n adp --timeout=300s"
+          --command "kubectl rollout restart deployment/adp-frontend -n adp-preprod && kubectl rollout status deployment/adp-frontend -n adp-preprod --timeout=300s"
 
         echo ""
         echo "✅ adp-frontend restarted — Next.js server-side fetch cache cleared."
@@ -617,14 +617,14 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-orders -n adp --tail=300 | grep -iE 'Failed to send order notification|communication|notifications/send|lb://|No instances|Order email' | tail -15 || echo '(no matching lines yet)'"
+          --command "kubectl logs deployment/adp-orders -n adp-preprod --tail=300 | grep -iE 'Failed to send order notification|communication|notifications/send|lb://|No instances|Order email' | tail -15 || echo '(no matching lines yet)'"
 
         echo ""
         echo "=== Setting COMMUNICATION_SERVICE_URL + restarting adp-orders ==="
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl set env deployment/adp-orders -n adp COMMUNICATION_SERVICE_URL=http://adp-communication-service:8084 && kubectl rollout status deployment/adp-orders -n adp --timeout=300s && echo '--- effective value ---' && kubectl get deployment adp-orders -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"COMMUNICATION_SERVICE_URL\")].value}'; echo"
+          --command "kubectl set env deployment/adp-orders -n adp-preprod COMMUNICATION_SERVICE_URL=http://adp-communication-service:8084 && kubectl rollout status deployment/adp-orders -n adp-preprod --timeout=300s && echo '--- effective value ---' && kubectl get deployment adp-orders -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"COMMUNICATION_SERVICE_URL\")].value}'; echo"
 
         echo ""
         echo "✅ adp-orders now points communication.service.url at the direct DNS."
@@ -650,7 +650,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl get pods -n adp -l app=adp-communication -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,IMAGE:.spec.containers[0].image"
+          --command "kubectl get pods -n adp-preprod -l app=adp-communication -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,IMAGE:.spec.containers[0].image"
 
         echo ""
         echo "=== startup logs of a crash-looping pod (previous + current) ==="
@@ -658,12 +658,12 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            P=\$(kubectl get pods -n adp -l app=adp-communication -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[0].ready}{\"\n\"}{end}' | awk '\$2==\"false\"{print \$1; exit}')
+            P=\$(kubectl get pods -n adp-preprod -l app=adp-communication -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[0].ready}{\"\n\"}{end}' | awk '\$2==\"false\"{print \$1; exit}')
             echo \"crashing pod: \$P\"
             echo '--- previous (crashed) container, last 80 lines ---'
-            kubectl logs \$P -n adp --previous --tail=80 2>&1 | tail -70
+            kubectl logs \$P -n adp-preprod --previous --tail=80 2>&1 | tail -70
             echo '--- current attempt, last 40 lines ---'
-            kubectl logs \$P -n adp --tail=40 2>&1 | tail -40
+            kubectl logs \$P -n adp-preprod --tail=40 2>&1 | tail -40
           "
 
         echo ""
@@ -698,18 +698,18 @@ steps:
           --name $(CLUSTER_NAME) \
           --command "
             set -e
-            EXISTS=\$(kubectl get deployment adp-communication -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"AZURE_SERVICE_BUS_CONNECTION_STRING_COMM\")].name}')
+            EXISTS=\$(kubectl get deployment adp-communication -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"AZURE_SERVICE_BUS_CONNECTION_STRING_COMM\")].name}')
             if [ -n \"\$EXISTS\" ]; then
               echo 'env var AZURE_SERVICE_BUS_CONNECTION_STRING_COMM already present — no patch needed'
             else
               echo 'patching deployment: append AZURE_SERVICE_BUS_CONNECTION_STRING_COMM from secret adp-secrets/SERVICEBUS_CONNECTION_STRING'
-              kubectl patch deployment adp-communication -n adp --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/env/-\",\"value\":{\"name\":\"AZURE_SERVICE_BUS_CONNECTION_STRING_COMM\",\"valueFrom\":{\"secretKeyRef\":{\"name\":\"adp-secrets\",\"key\":\"SERVICEBUS_CONNECTION_STRING\"}}}}]'
+              kubectl patch deployment adp-communication -n adp-preprod --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/env/-\",\"value\":{\"name\":\"AZURE_SERVICE_BUS_CONNECTION_STRING_COMM\",\"valueFrom\":{\"secretKeyRef\":{\"name\":\"adp-secrets\",\"key\":\"SERVICEBUS_CONNECTION_STRING\"}}}}]'
             fi
             echo '--- rollout ---'
-            kubectl rollout restart deployment/adp-communication -n adp
-            kubectl rollout status deployment/adp-communication -n adp --timeout=300s || true
+            kubectl rollout restart deployment/adp-communication -n adp-preprod
+            kubectl rollout status deployment/adp-communication -n adp-preprod --timeout=300s || true
             echo '--- pods now (ready + restarts + image) ---'
-            kubectl get pods -n adp -l app=adp-communication -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,IMAGE:.spec.containers[0].image
+            kubectl get pods -n adp-preprod -l app=adp-communication -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,IMAGE:.spec.containers[0].image
           "
 
         echo ""
@@ -740,12 +740,12 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            kubectl patch networkpolicy allow-only-gateway-to-masters -n adp --type=merge -p '{\"spec\":{\"ingress\":[{\"from\":[{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-authentication\"}}},{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-inventory\"}}}],\"ports\":[{\"protocol\":\"TCP\",\"port\":8085}]}]}}'
+            kubectl patch networkpolicy allow-only-gateway-to-masters -n adp-preprod --type=merge -p '{\"spec\":{\"ingress\":[{\"from\":[{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-authentication\"}}},{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-inventory\"}}}],\"ports\":[{\"protocol\":\"TCP\",\"port\":8085}]}]}}'
             echo '--- effective masters policy ingress ---'
-            kubectl get networkpolicy allow-only-gateway-to-masters -n adp -o jsonpath='{.spec.ingress[0].from}'; echo
+            kubectl get networkpolicy allow-only-gateway-to-masters -n adp-preprod -o jsonpath='{.spec.ingress[0].from}'; echo
             echo '--- live connect test: inventory pod -> masters:8085 ---'
-            INV=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}')
-            kubectl exec -n adp \$INV -- sh -c 'wget -q -O - -T 8 http://adp-masters-service:8085/api/filters/by-name 2>&1 | head -5; echo exit=\$?' 2>&1 | head -10
+            INV=\$(kubectl get pod -n adp-preprod -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}')
+            kubectl exec -n adp-preprod \$INV -- sh -c 'wget -q -O - -T 8 http://adp-masters-service:8085/api/filters/by-name 2>&1 | head -5; echo exit=\$?' 2>&1 | head -10
           "
 
         echo ""
@@ -773,14 +773,14 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-inventory -n adp --tail=600 | grep -iE 'redis|lettuce|cache|connect timed out|ResourceAccess|RedisConnectionFailure|Unable to connect|users-service|chat-service|slow|took [0-9]' | tail -40 || echo '(no matching lines — reload a detail page first, then rerun)'"
+          --command "kubectl logs deployment/adp-inventory -n adp-preprod --tail=600 | grep -iE 'redis|lettuce|cache|connect timed out|ResourceAccess|RedisConnectionFailure|Unable to connect|users-service|chat-service|slow|took [0-9]' | tail -40 || echo '(no matching lines — reload a detail page first, then rerun)'"
 
         echo ""
         echo "=== Does inventory have a live Redis connection? (startup + Lettuce) ==="
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-inventory -n adp --tail=2000 | grep -iE 'lettuce|redis' | head -20 || echo '(no redis log lines at all — caching may be silently failing on connect)'"
+          --command "kubectl logs deployment/adp-inventory -n adp-preprod --tail=2000 | grep -iE 'lettuce|redis' | head -20 || echo '(no redis log lines at all — caching may be silently failing on connect)'"
 
         echo ""
         echo "Interpretation:"
@@ -803,10 +803,10 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            kubectl set env deployment/adp-inventory -n adp SPRING_CACHE_TYPE=$MODE
-            kubectl rollout status deployment/adp-inventory -n adp --timeout=300s
+            kubectl set env deployment/adp-inventory -n adp-preprod SPRING_CACHE_TYPE=$MODE
+            kubectl rollout status deployment/adp-inventory -n adp-preprod --timeout=300s
             echo '--- effective SPRING_CACHE_TYPE on new pod ---'
-            kubectl get deployment adp-inventory -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"SPRING_CACHE_TYPE\")].value}'; echo
+            kubectl get deployment adp-inventory -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"SPRING_CACHE_TYPE\")].value}'; echo
           "
         echo ""
         echo "Now reload a vehicle detail page:"
@@ -838,17 +838,17 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod rolecheck -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run rolecheck -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod rolecheck -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run rolecheck -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'const d=db.getSiblingDB(\"adp_users\"); var n=d.roles.countDocuments({}); print(\"adp_users.roles count: \"+n); d.roles.find({},{role_name:1,role_type:1,\"input_values.exportLicenseNo.mandatory\":1,\"input_values.exportLicenseUrl.mandatory\":1}).forEach(function(r){printjson(r);}); if(n===0){print(\"--- databases (roles not in adp_users) ---\"); printjson(db.adminCommand({listDatabases:1}).databases.map(function(x){return x.name;}));}' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolecheck -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolecheck -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
             echo '--- Chinese Seller role: exportLicenseNo / exportLicenseUrl ---'
-            kubectl logs rolecheck -n adp 2>&1 | tail -40
-            kubectl delete pod rolecheck -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl logs rolecheck -n adp-preprod 2>&1 | tail -40
+            kubectl delete pod rolecheck -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Interpretation:"
@@ -882,17 +882,17 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod rolefix -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run rolefix -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod rolefix -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run rolefix -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'const d=db.getSiblingDB(\"adp_users\"); printjson(d.roles.updateOne({role_name:\"Chinese Seller\"},{\$set:{\"input_values.exportLicenseNo.mandatory\":false,\"input_values.exportLicenseUrl.mandatory\":false}})); printjson(d.roles.findOne({role_name:\"Chinese Seller\"},{role_name:1,\"input_values.exportLicenseNo\":1,\"input_values.exportLicenseUrl\":1}));' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolefix -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolefix -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
             echo '--- updateOne result + new flags ---'
-            kubectl logs rolefix -n adp 2>&1 | tail -40
-            kubectl delete pod rolefix -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl logs rolefix -n adp-preprod 2>&1 | tail -40
+            kubectl delete pod rolefix -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Interpretation:"
@@ -919,13 +919,13 @@ steps:
         echo "=== adp-chat: negotiation email queue / routing errors ==="
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-chat -n adp --tail=600 2>&1 | grep -iE 'Negotiation email|Error routing negotiation|NEGOTIATION_NEW_PROPOSAL|NEGOTIATION_PROPOSAL_SENT|sendNegotiationMail|getUserById|notificationsSender|communication' | tail -40 || echo '(no matching lines — send a fresh proposal, then rerun)'"
+          --command "kubectl logs deployment/adp-chat -n adp-preprod --tail=600 2>&1 | grep -iE 'Negotiation email|Error routing negotiation|NEGOTIATION_NEW_PROPOSAL|NEGOTIATION_PROPOSAL_SENT|sendNegotiationMail|getUserById|notificationsSender|communication' | tail -40 || echo '(no matching lines — send a fresh proposal, then rerun)'"
 
         echo ""
         echo "=== adp-communication: send attempts / template / errors ==="
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-communication -n adp --tail=600 2>&1 | grep -iE 'NEGOTIATION_NEW_PROPOSAL|NEGOTIATION_PROPOSAL_SENT|template|notification|EmailProvider|ACS|sent|failed|error' | tail -40 || echo '(no matching lines)'"
+          --command "kubectl logs deployment/adp-communication -n adp-preprod --tail=600 2>&1 | grep -iE 'NEGOTIATION_NEW_PROPOSAL|NEGOTIATION_PROPOSAL_SENT|template|notification|EmailProvider|ACS|sent|failed|error' | tail -40 || echo '(no matching lines)'"
 
         echo ""
         echo "Interpretation:"
@@ -952,10 +952,10 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            kubectl set env deployment/adp-chat -n adp COMMUNICATION_SERVICE_URL=http://adp-communication-service:8084
-            kubectl rollout status deployment/adp-chat -n adp --timeout=300s || true
+            kubectl set env deployment/adp-chat -n adp-preprod COMMUNICATION_SERVICE_URL=http://adp-communication-service:8084
+            kubectl rollout status deployment/adp-chat -n adp-preprod --timeout=300s || true
             echo '--- effective COMMUNICATION_SERVICE_URL on new pod ---'
-            kubectl get deployment adp-chat -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"COMMUNICATION_SERVICE_URL\")].value}'; echo
+            kubectl get deployment adp-chat -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"COMMUNICATION_SERVICE_URL\")].value}'; echo
           "
         echo ""
         echo "Now send a fresh buyer proposal and check the seller inbox. Use DIAGNOSE_NEGOTIATION_EMAIL=true"
@@ -983,17 +983,17 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod msgcheck -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run msgcheck -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod msgcheck -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run msgcheck -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'const d=db.getSiblingDB(\"adp_statemachine\"); var n=d.negotiation_state_messages.countDocuments({}); print(\"negotiation_state_messages count: \"+n); d.negotiation_state_messages.find({},{stateCode:1,defaultMessages:1,isActive:1}).forEach(function(r){printjson(r);}); print(\"=== USER transitions: fromState -> toState : transitionMessage ===\"); d.negotiation_state_transitions.find({triggeredBy:\"USER\"},{fromState:1,toState:1,transitionMessage:1}).forEach(function(t){print((t.fromState||\"?\")+\" -> \"+(t.toState||\"?\")+\" : \"+(t.transitionMessage||\"(NONE)\"));}); print(\"=== resolve IDLE->BUYER_PROPOSED message (as the app does) ===\"); var tx=d.negotiation_state_transitions.findOne({fromState:\"IDLE\",toState:\"BUYER_PROPOSED\",triggeredBy:\"USER\"}); if(tx){print(\"link=\"+tx.transitionMessage+\" linkType=\"+(tx.transitionMessage instanceof ObjectId?\"ObjectId\":typeof tx.transitionMessage)); var mm=d.negotiation_state_messages.findOne({_id:tx.transitionMessage}); print(\"resolveByRaw=\"+(mm?(\"FOUND info=\"+(mm.defaultMessages&&mm.defaultMessages.info)):\"NOT FOUND\")); var sm=d.negotiation_state_messages.findOne({stateCode:\"BUYER_PROPOSED\",messageType:\"TRANSITION\"}); if(sm){print(\"msgIdType=\"+(sm._id instanceof ObjectId?\"ObjectId\":typeof sm._id)+\" msgId=\"+sm._id);}else{print(\"no BUYER_PROPOSED TRANSITION message doc present\");}} if(n===0){print(\"--- databases ---\"); printjson(db.adminCommand({listDatabases:1}).databases.map(function(x){return x.name;}));}' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod msgcheck -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod msgcheck -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
             echo '--- negotiation_state_messages (stateCode -> defaultMessages) ---'
-            kubectl logs msgcheck -n adp 2>&1 | tail -80
-            kubectl delete pod msgcheck -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl logs msgcheck -n adp-preprod 2>&1 | tail -80
+            kubectl delete pod msgcheck -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
 
         echo ""
@@ -1001,9 +1001,9 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            FE=\$(kubectl get pod -n adp -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}')
+            FE=\$(kubectl get pod -n adp-preprod -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}')
             echo \"using pod: \$FE\"
-            kubectl exec -n adp \$FE -- wget -q -O - -T 8 'http://adp-statemachine-service:8086/negotiation/state/transition/config?fromState=IDLE&toState=BUYER_PROPOSED&module=NEGOTIATION' 2>&1 | head -60; echo
+            kubectl exec -n adp-preprod \$FE -- wget -q -O - -T 8 'http://adp-statemachine-service:8086/negotiation/state/transition/config?fromState=IDLE&toState=BUYER_PROPOSED&module=NEGOTIATION' 2>&1 | head -60; echo
           "
 
         echo ""
@@ -1033,10 +1033,10 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            kubectl set env deployment/adp-chat -n adp STATEMACHINE_SERVICE_URL=http://adp-statemachine-service:8086
-            kubectl rollout status deployment/adp-chat -n adp --timeout=300s || true
+            kubectl set env deployment/adp-chat -n adp-preprod STATEMACHINE_SERVICE_URL=http://adp-statemachine-service:8086
+            kubectl rollout status deployment/adp-chat -n adp-preprod --timeout=300s || true
             echo '--- effective STATEMACHINE_SERVICE_URL on new pod ---'
-            kubectl get deployment adp-chat -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"STATEMACHINE_SERVICE_URL\")].value}'; echo
+            kubectl get deployment adp-chat -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"STATEMACHINE_SERVICE_URL\")].value}'; echo
           "
         echo ""
         echo "Now run a fresh negotiation transition (propose/counter/accept). The chat/status text should show"
@@ -1077,17 +1077,17 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod golivecheck -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run golivecheck -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod golivecheck -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run golivecheck -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var emails=[\"${{ parameters.SELLER_EMAIL }}\",\"${{ parameters.SELLER_EMAIL_CONTROL }}\"]; var dbs=db.adminCommand({listDatabases:1}).databases.map(function(x){return x.name;}); print(\"databases: \"+dbs.join(\", \")); emails.forEach(function(email){ if(!email||email===\"none\"){return;} print(\"################ SELLER: \"+email+\" ################\"); var found=false; dbs.forEach(function(dn){ if(found){return;} var d=db.getSiblingDB(dn); var cols; try{cols=d.getCollectionNames();}catch(e){return;} if(cols.indexOf(\"users\")<0){return;} var usr=d.users.findOne({\$or:[{email_id:email},{emailId:email},{email:email},{username:email},{email_id:{\$regex:\"^\"+email+\"\$\",\$options:\"i\"}},{emailId:{\$regex:\"^\"+email+\"\$\",\$options:\"i\"}},{email:{\$regex:\"^\"+email+\"\$\",\$options:\"i\"}},{username:{\$regex:\"^\"+email+\"\$\",\$options:\"i\"}}]}); if(!usr){return;} found=true; print(\"found user in: \"+dn+\".users\"); var vs=usr.verificationStatus; print(\"verificationStatus = \"+vs+(String(vs).toUpperCase()===\"ACTIVE\"?\"  (OK: listings may go LIVE)\":\"  (NOT ACTIVE: new listings are FORCED to DRAFT)\")); var uid=usr._id.toString(); print(\"userId(_id) = \"+uid); var vfound=false; dbs.forEach(function(idn){ var idb=db.getSiblingDB(idn); var ic; try{ic=idb.getCollectionNames();}catch(e){return;} if(ic.indexOf(\"vehicles\")<0){return;} var q={createdBy:{\$in:[uid,email]}}; var total=idb.vehicles.countDocuments(q); if(total===0){return;} vfound=true; print(\"vehicles in \"+idn+\".vehicles by this seller: \"+total); idb.vehicles.aggregate([{\$match:q},{\$group:{_id:\"\$status\",n:{\$sum:1}}}]).forEach(function(g){print(\"  \"+(g._id||\"(null)\")+\": \"+g.n);}); idb.vehicles.find(q,{title:1,status:1}).limit(8).forEach(function(v){print(\"  [\"+(v.status||\"?\")+\"] \"+(v.title||v._id));}); }); if(!vfound){print(\"  no vehicles found by createdBy = _id or email in any *.vehicles collection\");} }); if(!found){print(\"USER NOT FOUND in any *.users collection (searched emailId/email, case-insensitive)\");} });' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod golivecheck -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod golivecheck -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
             echo '--- seller verificationStatus + vehicle status breakdown ---'
-            kubectl logs golivecheck -n adp 2>&1 | tail -80
-            kubectl delete pod golivecheck -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl logs golivecheck -n adp-preprod 2>&1 | tail -80
+            kubectl delete pod golivecheck -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Interpretation:"
@@ -1126,17 +1126,17 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod sellerfix -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run sellerfix -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod sellerfix -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run sellerfix -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var email=\"${{ parameters.FIX_SELLER_EMAIL }}\"; var promote=(\"${{ parameters.PROMOTE_SELLER_DRAFTS }}\"===\"true\"); if(!email||email===\"none\"){print(\"FIX_SELLER_EMAIL is empty/none — nothing to do\");} else { var dbs=db.adminCommand({listDatabases:1}).databases.map(function(x){return x.name;}); var q1={\$or:[{email_id:email},{emailId:email},{email:email},{username:email}]}; var udb=null,usr=null; dbs.forEach(function(dn){ if(usr){return;} var d=db.getSiblingDB(dn); var cols; try{cols=d.getCollectionNames();}catch(e){return;} if(cols.indexOf(\"users\")<0){return;} var f=d.users.findOne(q1); if(f){udb=dn;usr=f;} }); if(!usr){print(\"USER NOT FOUND for \"+email+\" — aborting, no changes made\");} else { var ud=db.getSiblingDB(udb); var uid=usr._id.toString(); print(\"user: \"+udb+\".users  _id=\"+uid); print(\"verificationStatus BEFORE = \"+usr.verificationStatus); var r=ud.users.updateOne({_id:usr._id},{\$set:{verificationStatus:\"ACTIVE\",verificationDate:new Date()}}); print(\"users update matched=\"+r.matchedCount+\" modified=\"+r.modifiedCount); var after=ud.users.findOne({_id:usr._id},{verificationStatus:1}); print(\"verificationStatus AFTER  = \"+after.verificationStatus); if(promote){ dbs.forEach(function(idn){ var idb=db.getSiblingDB(idn); var ic; try{ic=idb.getCollectionNames();}catch(e){return;} if(ic.indexOf(\"vehicles\")<0){return;} var vq={createdBy:{\$in:[uid,email]},status:\"DRAFT\"}; var cnt=idb.vehicles.countDocuments(vq); if(cnt===0){return;} print(\"promoting \"+cnt+\" DRAFT vehicles to LIVE in \"+idn+\".vehicles\"); var vr=idb.vehicles.updateMany(vq,{\$set:{status:\"LIVE\"}}); print(\"  vehicles modified=\"+vr.modifiedCount); }); } else { print(\"PROMOTE_SELLER_DRAFTS not set — existing DRAFT listings left unchanged (seller can re-save).\"); } } }' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod sellerfix -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod sellerfix -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
             echo '--- fix output ---'
-            kubectl logs sellerfix -n adp 2>&1 | tail -60
-            kubectl delete pod sellerfix -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl logs sellerfix -n adp-preprod 2>&1 | tail -60
+            kubectl delete pod sellerfix -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
 
         if [ "${{ parameters.PROMOTE_SELLER_DRAFTS }}" = "true" ]; then
@@ -1145,10 +1145,10 @@ steps:
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
             --command "
-              POD=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+              POD=\$(kubectl get pod -n adp-preprod -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
               if [ -z \"\$POD\" ]; then echo 'WARN: no inventory pod found — run pipeline-prod-inventory reindex manually'; exit 0; fi
               echo \"Using pod: \$POD\"
-              kubectl exec -n adp \$POD -- wget -qO- --post-data='' --header='Content-Type: application/json' \
+              kubectl exec -n adp-preprod \$POD -- wget -qO- --post-data='' --header='Content-Type: application/json' \
                 http://localhost:8084/api/v1/inventory/reindex-all 2>&1 | head -40 || echo '(reindex running — AKS invoke timeout is expected for long operations)'
             "
         fi
@@ -1182,17 +1182,17 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod blobchk -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run blobchk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod blobchk -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run blobchk -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var au=db.getSiblingDB(\"adp_users\"); var inv=db.getSiblingDB(\"adp_inventory\"); var email=\"${{ parameters.BLOB_CHECK_EMAIL }}\"; var u=au.users.findOne({email_id:email},{_id:1,name:1}); if(!u){print(\"user not found: \"+email);} else { var uid=String(u._id); print(\"seller=\"+email+\" name=\"+(u.name||\"\")+\" id=\"+uid); var prod=0,old=0,other=0,total=0; inv.vehicles.find({createdBy:uid},{brand:1,model:1,createTime:1,mainImageUrl:1,imageUrls:1}).sort({createTime:-1}).limit(25).forEach(function(v){ total++; var url=v.mainImageUrl||((v.imageUrls&&v.imageUrls[0])||\"\"); var cls=url.indexOf(\"azamppruaenstg\")>=0?\"PROD\":(url.indexOf(\"preprodblobadp\")>=0?\"OLD-PREPROD\":\"OTHER/none\"); if(cls==\"PROD\")prod++; else if(cls==\"OLD-PREPROD\")old++; else other++; var host=url?url.split(\"/\").slice(0,4).join(\"/\"):\"(no image)\"; print(cls+\" | \"+(v.brand||\"\")+\" \"+(v.model||\"\")+\" | \"+(v.createTime||\"\")+\" | \"+host); }); print(\"---- totals: \"+total+\" vehicles | PROD=\"+prod+\" OLD-PREPROD=\"+old+\" OTHER=\"+other+\" ----\"); if(total===0)print(\"(no vehicles with createdBy=\"+uid+\" — confirm the email or that cars were saved)\"); }' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod blobchk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod blobchk -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
             echo '--- recent vehicles for seller (class | brand model | createTime | host) ---'
-            kubectl logs blobchk -n adp 2>&1 | tail -60
-            kubectl delete pod blobchk -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl logs blobchk -n adp-preprod 2>&1 | tail -60
+            kubectl delete pod blobchk -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Interpretation:"
@@ -1225,16 +1225,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod rolechk -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run rolechk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod rolechk -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run rolechk -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var au=db.getSiblingDB(\"adp_users\"); var roles={}; au.roles.find({},{role_name:1,role_type:1}).forEach(function(r){roles[String(r._id)]={n:r.role_name,t:r.role_type};}); print(\"=== roles present in adp_users.roles ===\"); Object.keys(roles).forEach(function(k){print(\"  \"+k+\" -> \"+roles[k].n+\" / \"+roles[k].t);}); var email=\"${{ parameters.CHECK_ROLE_EMAIL }}\"; if(email && email!=\"none\"){ print(\"################ ACCOUNT: \"+email+\" ################\"); var u=au.users.findOne({email_id:email}); if(!u){print(\"USER NOT FOUND (by email_id)\");} else { var rid=u.role_id?String(u.role_id):\"(null)\"; var rr=roles[rid]; print(\"_id=\"+u._id+\" role_id=\"+rid+\" active=\"+u.active+\" otp_verified=\"+u.otp_verified+\" verificationStatus=\"+u.verificationStatus+\" create_date=\"+u.create_date); print(rr?(\"ROLE OK -> \"+rr.n+\" / \"+rr.t):(\"BROKEN: role_id \"+rid+\" has NO match in roles -> roleType will be EMPTY (no role badge, no dashboard)\")); } } print(\"=== ALL USERS (role resolution) ===\"); var ok=0,nul=0,brk=0,tot=0; au.users.find({},{email_id:1,role_id:1}).forEach(function(x){ tot++; var rid=x.role_id?String(x.role_id):null; if(!rid){nul++; print(\"NO-ROLE-ID | \"+(x.email_id||x._id));} else if(!roles[rid]){brk++; print(\"BROKEN     | \"+(x.email_id||x._id)+\" | role_id=\"+rid);} else {ok++; print(\"OK \"+roles[rid].t+\" | \"+(x.email_id||x._id));} }); print(\"---- totals: \"+tot+\" users | OK=\"+ok+\" NO-ROLE-ID=\"+nul+\" BROKEN=\"+brk+\" ----\");' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolechk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs rolechk -n adp 2>&1 | tail -200
-            kubectl delete pod rolechk -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolechk -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs rolechk -n adp-preprod 2>&1 | tail -200
+            kubectl delete pod rolechk -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Interpretation:"
@@ -1262,12 +1262,12 @@ steps:
         echo "########## AUTHENTICATION — getUserInfoByToken / user info / errors ##########"
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-authentication -n adp --tail=400 2>&1 | grep -iE 'getUserInfoByToken|get-by-id|user information|Users Service error|roleType|role_type|500|Exception|ERROR' | tail -50 || echo 'no matching auth lines'" || true
+          --command "kubectl logs deployment/adp-authentication -n adp-preprod --tail=400 2>&1 | grep -iE 'getUserInfoByToken|get-by-id|user information|Users Service error|roleType|role_type|500|Exception|ERROR' | tail -50 || echo 'no matching auth lines'" || true
 
         echo "########## USERS — get-by-id / role resolution / errors ##########"
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-users -n adp --tail=400 2>&1 | grep -iE 'get-by-id|Fetching user by userId|User data fetched|roleType|role_type|Role not found|Exception|ERROR|500' | tail -50 || echo 'no matching users lines'" || true
+          --command "kubectl logs deployment/adp-users -n adp-preprod --tail=400 2>&1 | grep -iE 'get-by-id|Fetching user by userId|User data fetched|roleType|role_type|Role not found|Exception|ERROR|500' | tail -50 || echo 'no matching users lines'" || true
 
         echo ""
         echo "Interpretation:"
@@ -1300,16 +1300,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod ridchk -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run ridchk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod ridchk -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run ridchk -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var sr=d.roles.findOne({}); print(\"roles._id sampleType = \"+(sr._id instanceof ObjectId?\"ObjectId\":typeof sr._id)+\"  value=\"+sr._id); var su=d.users.findOne({}); print(\"users._id sampleType = \"+(su._id instanceof ObjectId?\"ObjectId\":typeof su._id)); var email=\"${{ parameters.CHECK_ROLE_EMAIL }}\"; var u=(email && email!=\"none\")?d.users.findOne({email_id:email},{role_id:1,_id:1}):null; if(!u){print(\"(set CHECK_ROLE_EMAIL to a real account to test its role_id; using first Seller instead)\"); u=d.users.findOne({},{role_id:1,_id:1});} if(u){ var rid=String(u.role_id); print(\"test user _idType=\"+(u._id instanceof ObjectId?\"ObjectId\":typeof u._id)+\"  role_id=\"+rid+\"  role_idType=\"+(u.role_id instanceof ObjectId?\"ObjectId\":typeof u.role_id)); print(\"roles STRING-match count (what Java findById(role_id) does) = \"+d.roles.find({_id:rid}).count()); try{print(\"roles OBJECTID-match count = \"+d.roles.find({_id:ObjectId(rid)}).count());}catch(e){print(\"ObjectId(rid) error: \"+e);} }' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod ridchk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs ridchk -n adp 2>&1 | tail -40
-            kubectl delete pod ridchk -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod ridchk -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs ridchk -n adp-preprod 2>&1 | tail -40
+            kubectl delete pod ridchk -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Interpretation (Spring converts a 24-hex String @Id to ObjectId, so the app's findById actually runs the OBJECTID query):"
@@ -1342,16 +1342,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod ridfix -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run ridfix -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod ridfix -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run ridfix -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var toFix=[]; d.roles.find().forEach(function(r){ if(typeof r._id===\"string\") toFix.push(r); }); print(\"roles with string _id to convert: \"+toFix.length); if(toFix.length>0){ d.roles_idfix_bak.drop(); toFix.forEach(function(r){ d.roles_idfix_bak.insertOne(r); }); print(\"backed up \"+toFix.length+\" role(s) to roles_idfix_bak\"); } var changed=0; toFix.forEach(function(r){ var sid=r._id; if(!/^[0-9a-fA-F]{24}\$/.test(sid)){ print(\"  SKIP non-hex: \"+sid); return; } var oid=ObjectId(sid); if(d.roles.countDocuments({_id:oid})>0){ print(\"  SKIP collision: \"+sid); return; } var doc=Object.assign({},r); doc._id=oid; d.roles.deleteOne({_id:sid}); d.roles.insertOne(doc); changed++; print(\"  converted \"+(r.role_name||\"\")+\"  \"+sid); }); print(\"converted \"+changed+\" role(s) String -> ObjectId\"); print(\"AFTER roles:\"); d.roles.find({},{_id:1,role_name:1}).forEach(function(r){print(\"  type=\"+(r._id instanceof ObjectId?\"ObjectId\":typeof r._id)+\"  \"+(r.role_name||\"\"));});' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod ridfix -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs ridfix -n adp 2>&1 | tail -40
-            kubectl delete pod ridfix -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod ridfix -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs ridfix -n adp-preprod 2>&1 | tail -40
+            kubectl delete pod ridfix -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "AFTER should show every role with type=ObjectId. Backup kept in adp_users.roles_idfix_bak."
@@ -1374,34 +1374,34 @@ steps:
 
         echo "########## adp-orders + adp-chat — live INVENTORY_SERVICE_URL ##########"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "echo -n 'adp-orders INVENTORY_SERVICE_URL='; kubectl get deployment adp-orders -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo; echo -n 'adp-chat INVENTORY_SERVICE_URL='; kubectl get deployment adp-chat -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo" || true
+          --command "echo -n 'adp-orders INVENTORY_SERVICE_URL='; kubectl get deployment adp-orders -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo; echo -n 'adp-chat INVENTORY_SERVICE_URL='; kubectl get deployment adp-chat -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo" || true
 
         echo "########## adp-chat logs — LOCKED / status-update / errors ##########"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-chat -n adp --tail=500 2>&1 | grep -iE 'updateVehicleStatus|status-update|LOCKED|VEHICLE_LOCKED|inventory|timeout|refused|UnknownHost|Connection|Exception|ERROR|40[0-9]|50[0-9]' | tail -50 || echo 'no matching adp-chat lines'" || true
+          --command "kubectl logs deployment/adp-chat -n adp-preprod --tail=500 2>&1 | grep -iE 'updateVehicleStatus|status-update|LOCKED|VEHICLE_LOCKED|inventory|timeout|refused|UnknownHost|Connection|Exception|ERROR|40[0-9]|50[0-9]' | tail -50 || echo 'no matching adp-chat lines'" || true
 
         echo "########## adp-orders logs — SOLD / status-update / errors ##########"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-orders -n adp --tail=500 2>&1 | grep -iE 'updateVehicleStatus|status-update|SOLD|inventory|timeout|refused|UnknownHost|Connection|Exception|ERROR|40[0-9]|50[0-9]' | tail -50 || echo 'no matching adp-orders lines'" || true
+          --command "kubectl logs deployment/adp-orders -n adp-preprod --tail=500 2>&1 | grep -iE 'updateVehicleStatus|status-update|SOLD|inventory|timeout|refused|UnknownHost|Connection|Exception|ERROR|40[0-9]|50[0-9]' | tail -50 || echo 'no matching adp-orders lines'" || true
 
         echo "########## adp-inventory logs — status-update received / errors ##########"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs deployment/adp-inventory -n adp --tail=500 2>&1 | grep -iE 'status-update|updateVehicleStatus|SOLD|status|Exception|ERROR|not found|invalid' | tail -50 || echo 'no matching adp-inventory lines'" || true
+          --command "kubectl logs deployment/adp-inventory -n adp-preprod --tail=500 2>&1 | grep -iE 'status-update|updateVehicleStatus|SOLD|status|Exception|ERROR|not found|invalid' | tail -50 || echo 'no matching adp-inventory lines'" || true
 
         echo "########## MongoDB — recent orders and their vehicle status ##########"
         az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
           || echo "(acr import returned non-zero — continuing)"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
-            kubectl delete pod soldchk -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run soldchk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            kubectl delete pod soldchk -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run soldchk -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var o=db.getSiblingDB(\"adp_orders\"); var inv=db.getSiblingDB(\"adp_inventory\"); print(\"orders total: \"+o.orders.countDocuments({})); o.orders.find({}).sort({createdAt:-1}).limit(5).forEach(function(ord){ print(\"---- order \"+(ord.orderId||ord._id)+\" buyer=\"+(ord.buyerId||\"\")+\" orderStatus=\"+(ord.orderStatus||\"\")+\" createdAt=\"+(ord.createdAt||\"\")); var vs=ord.vehicles||[]; vs.forEach(function(v){ var vid=v.id||v._id; if(!vid){print(\"   (no vehicle id in order snapshot)\"); return;} var doc=inv.vehicles.findOne({_id:vid}); if(!doc){ try{doc=inv.vehicles.findOne({_id:ObjectId(vid)});}catch(e){} } print(\"   vehicle \"+vid+\" snapshotStatus=\"+(v.status||\"?\")+\" -> current inventory status=\"+(doc?doc.status:\"(NOT FOUND)\")); }); }); print(\"=== inventory vehicles status breakdown ===\"); inv.vehicles.aggregate([{\$group:{_id:\"\$status\",n:{\$sum:1}}}]).forEach(function(g){print(\"  \"+(g._id||\"(null)\")+\": \"+g.n);});' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod soldchk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs soldchk -n adp 2>&1 | tail -50
-            kubectl delete pod soldchk -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod soldchk -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs soldchk -n adp-preprod 2>&1 | tail -50
+            kubectl delete pod soldchk -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Read: if a vehicle shows current status=LIVE despite an order, the SOLD update did not persist."
@@ -1424,9 +1424,9 @@ steps:
         echo "########## FIX orders->inventory URL ##########"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            kubectl set env deployment/adp-orders -n adp INVENTORY_SERVICE_URL=http://adp-inventory-service:8084
-            kubectl rollout status deployment/adp-orders -n adp --timeout=300s || true
-            kubectl get deployment adp-orders -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo
+            kubectl set env deployment/adp-orders -n adp-preprod INVENTORY_SERVICE_URL=http://adp-inventory-service:8084
+            kubectl rollout status deployment/adp-orders -n adp-preprod --timeout=300s || true
+            kubectl get deployment adp-orders -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo
           "
 
   # ── Fix chat->inventory URL (FIX_CHAT_INVENTORY_URL=true) — WRITE ──
@@ -1444,9 +1444,9 @@ steps:
         echo "########## FIX chat->inventory URL ##########"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            kubectl set env deployment/adp-chat -n adp INVENTORY_SERVICE_URL=http://adp-inventory-service:8084
-            kubectl rollout status deployment/adp-chat -n adp --timeout=300s || true
-            kubectl get deployment adp-chat -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo
+            kubectl set env deployment/adp-chat -n adp-preprod INVENTORY_SERVICE_URL=http://adp-inventory-service:8084
+            kubectl rollout status deployment/adp-chat -n adp-preprod --timeout=300s || true
+            kubectl get deployment adp-chat -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo
           "
 
   # ── Mark a vehicle SOLD (MARK_VEHICLE_SOLD=true) — WRITE, one-off ──
@@ -1467,15 +1467,15 @@ steps:
           || echo "(acr import returned non-zero — continuing)"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
-            kubectl delete pod marksold -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run marksold -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            kubectl delete pod marksold -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run marksold -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var inv=db.getSiblingDB(\"adp_inventory\"); var vid=\"${{ parameters.MARK_SOLD_VEHICLE_ID }}\"; var q=null; if(inv.vehicles.countDocuments({_id:vid})>0){q={_id:vid};} else { try{ if(inv.vehicles.countDocuments({_id:ObjectId(vid)})>0){q={_id:ObjectId(vid)};} }catch(e){} } if(!q){print(\"vehicle not found: \"+vid);} else { print(\"BEFORE status=\"+inv.vehicles.findOne(q).status); var r=inv.vehicles.updateOne(q,{\$set:{status:\"SOLD\"}}); print(\"matched=\"+r.matchedCount+\" modified=\"+r.modifiedCount); print(\"AFTER status=\"+inv.vehicles.findOne(q).status); }' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod marksold -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs marksold -n adp 2>&1 | tail -20
-            kubectl delete pod marksold -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod marksold -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs marksold -n adp-preprod 2>&1 | tail -20
+            kubectl delete pod marksold -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "The inventory change stream will sync the SOLD status to Elasticsearch (drops from public listings)."
@@ -1500,36 +1500,36 @@ steps:
           || echo "(acr import returned non-zero — continuing)"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            ESURL=\$(kubectl get configmap adp-backend-config -n adp -o jsonpath='{.data.ELASTICSEARCH_URL}')
-            ESKEY=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.ELASTICSEARCH_API_KEY}' | base64 -d)
-            kubectl delete pod syncchk -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run syncchk -n adp --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
+            ESURL=\$(kubectl get configmap adp-backend-config -n adp-preprod -o jsonpath='{.data.ELASTICSEARCH_URL}')
+            ESKEY=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.ELASTICSEARCH_API_KEY}' | base64 -d)
+            kubectl delete pod syncchk -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run syncchk -n adp-preprod --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --env ESU=\"\$ESURL\" --env ESK=\"\$ESKEY\" \
               --command -- sh -c 'echo \"== change-stream-status ==\"; curl -s -m 20 http://adp-inventory-service:8084/api/v1/inventory/change-stream-status; echo; echo \"== ES adp_inventory counts by status ==\"; for s in LIVE LOCKED SOLD DRAFT; do printf \"\$s: \"; curl -s -H \"Authorization: ApiKey \$ESK\" \"\$ESU/adp_inventory/_count?q=status:\$s\"; echo; done; printf \"ALL: \"; curl -s -H \"Authorization: ApiKey \$ESK\" \"\$ESU/adp_inventory/_count\"; echo'
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod syncchk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs syncchk -n adp 2>&1 | tail -30
-            kubectl delete pod syncchk -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod syncchk -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs syncchk -n adp-preprod 2>&1 | tail -30
+            kubectl delete pod syncchk -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
 
         echo "########## Mongo vehicles counts by status ##########"
         az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force >/dev/null 2>&1 || true
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
-            kubectl delete pod syncmg -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run syncmg -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            kubectl delete pod syncmg -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run syncmg -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var inv=db.getSiblingDB(\"adp_inventory\"); print(\"Mongo vehicles by status:\"); inv.vehicles.aggregate([{\$group:{_id:\"\$status\",n:{\$sum:1}}}]).forEach(function(g){print(\"  \"+(g._id||\"(null)\")+\": \"+g.n);});' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod syncmg -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs syncmg -n adp 2>&1 | tail -15
-            kubectl delete pod syncmg -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod syncmg -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs syncmg -n adp-preprod 2>&1 | tail -15
+            kubectl delete pod syncmg -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
 
         echo "########## adp-inventory logs — ES sync + change-stream lifecycle ##########"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
-          --command "kubectl logs -l app=adp-inventory -n adp --tail=500 --prefix 2>&1 | grep -iE 'synced to Elasticsearch|Change Stream|change stream|replica set|Error in change|Failed to start|Elasticsearch sync|reindex' | tail -50 || echo 'no matching adp-inventory lines'" || true
+          --command "kubectl logs -l app=adp-inventory -n adp-preprod --tail=500 --prefix 2>&1 | grep -iE 'synced to Elasticsearch|Change Stream|change stream|replica set|Error in change|Failed to start|Elasticsearch sync|reindex' | tail -50 || echo 'no matching adp-inventory lines'" || true
 
         echo ""
         echo "Read: compare 'ES adp_inventory counts by status' vs 'Mongo vehicles by status'."
@@ -1555,13 +1555,13 @@ steps:
           || echo "(acr import returned non-zero — continuing)"
         az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            kubectl delete pod reidx -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run reidx -n adp --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
+            kubectl delete pod reidx -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run reidx -n adp-preprod --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- sh -c 'curl -s -m 120 -XPOST http://adp-inventory-service:8084/api/v1/inventory/reindex-all; echo'
-            for i in \$(seq 1 60); do ph=\$(kubectl get pod reidx -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs reidx -n adp 2>&1 | tail -20
-            kubectl delete pod reidx -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 60); do ph=\$(kubectl get pod reidx -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs reidx -n adp-preprod 2>&1 | tail -20
+            kubectl delete pod reidx -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Reindex runs in the background on adp-inventory. Give it a moment, then reload the storefront — the SOLD car should no longer appear, LIVE cars should."
@@ -1589,18 +1589,18 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            ESURL=\$(kubectl get configmap adp-backend-config -n adp -o jsonpath='{.data.ELASTICSEARCH_URL}')
-            ESKEY=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.ELASTICSEARCH_API_KEY}' | base64 -d)
+            ESURL=\$(kubectl get configmap adp-backend-config -n adp-preprod -o jsonpath='{.data.ELASTICSEARCH_URL}')
+            ESKEY=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.ELASTICSEARCH_API_KEY}' | base64 -d)
             if [ -z \"\$ESURL\" ] || [ -z \"\$ESKEY\" ]; then echo 'ERROR: ELASTICSEARCH_URL (configmap) or ELASTICSEARCH_API_KEY (secret) not found'; exit 1; fi
             echo \"ES endpoint: \$ESURL\"
-            kubectl delete pod esclear -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run esclear -n adp --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
+            kubectl delete pod esclear -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run esclear -n adp-preprod --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --env ESU=\"\$ESURL\" --env ESK=\"\$ESKEY\" \
               --command -- sh -c 'for idx in adp_inventory adp_inventory_items; do echo \"== \$idx ==\"; printf \"before: \"; curl -s -H \"Authorization: ApiKey \$ESK\" \"\$ESU/\$idx/_count\"; echo; curl -s -XPOST -H \"Authorization: ApiKey \$ESK\" \"\$ESU/\$idx/_delete_by_query?q=*:*&conflicts=proceed&refresh=true\"; echo; printf \"after: \"; curl -s -H \"Authorization: ApiKey \$ESK\" \"\$ESU/\$idx/_count\"; echo; done'
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod esclear -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs esclear -n adp 2>&1 | tail -40
-            kubectl delete pod esclear -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod esclear -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs esclear -n adp-preprod 2>&1 | tail -40
+            kubectl delete pod esclear -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Each index should read \"count\":0 in the 'after:' line. Reload the storefront/search to confirm it is empty."
@@ -1633,16 +1633,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod wipebiz -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run wipebiz -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod wipebiz -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run wipebiz -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var plan={adp_inventory:[\"vehicles\",\"inventory\",\"cart\",\"favourites\",\"insurance\",\"quote_builder\",\"tracking\"],adp_chat:[\"negotiations\",\"negotiation\",\"negotiation_history\",\"chat_messages\"],adp_orders:[\"orders\"]}; Object.keys(plan).forEach(function(dbn){ var d=db.getSiblingDB(dbn); plan[dbn].forEach(function(c){ var n=d.getCollection(c).countDocuments({}); if(n>0){ var del=d.getCollection(c).deleteMany({}); print(dbn+\".\"+c+\": deleted \"+del.deletedCount+\" of \"+n); } else { print(dbn+\".\"+c+\": empty (0) — skipped\"); } }); }); print(\"=== remaining counts ===\"); Object.keys(plan).forEach(function(dbn){ var d=db.getSiblingDB(dbn); plan[dbn].forEach(function(c){ print(\"  \"+dbn+\".\"+c+\" = \"+d.getCollection(c).countDocuments({})); }); }); print(\"KEPT: adp_users (users/roles/profiles/bank), adp_statemachine (config), adp_masters, adp_inventory.ports\");' >/dev/null 2>&1
-            for i in \$(seq 1 80); do ph=\$(kubectl get pod wipebiz -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs wipebiz -n adp 2>&1 | tail -60
-            kubectl delete pod wipebiz -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 80); do ph=\$(kubectl get pod wipebiz -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs wipebiz -n adp-preprod 2>&1 | tail -60
+            kubectl delete pod wipebiz -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "No in-DB backup was taken (external backup already exists)."
@@ -1668,16 +1668,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod bulkvfy -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run bulkvfy -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod bulkvfy -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run bulkvfy -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var excl=\"${{ parameters.BULK_VERIFY_EXCLUDE }}\".split(\",\").map(function(s){return s.trim();}).filter(function(s){return s;}); print(\"excluding: \"+excl.join(\", \")); var willChange=d.users.countDocuments({email_id:{\$nin:excl}, verificationStatus:{\$ne:\"ACTIVE\"}}); print(\"accounts to set ACTIVE (currently not ACTIVE, not excluded): \"+willChange); var r=d.users.updateMany({email_id:{\$nin:excl}}, {\$set:{verificationStatus:\"ACTIVE\", verificationDate:new Date()}}); print(\"matched=\"+r.matchedCount+\" modified=\"+r.modifiedCount); print(\"=== status after ===\"); d.users.find({},{email_id:1,verificationStatus:1}).forEach(function(u){print(\"  \"+(u.email_id||u._id)+\" | \"+u.verificationStatus);});' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod bulkvfy -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs bulkvfy -n adp 2>&1 | tail -60
-            kubectl delete pod bulkvfy -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod bulkvfy -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs bulkvfy -n adp-preprod 2>&1 | tail -60
+            kubectl delete pod bulkvfy -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Excluded accounts keep their prior status. Sellers just activated can list going forward; existing DRAFT"
@@ -1703,16 +1703,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod replemail -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run replemail -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod replemail -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run replemail -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var oldE=\"${{ parameters.REPLACE_OLD_EMAIL }}\"; var newE=\"${{ parameters.REPLACE_NEW_EMAIL }}\"; var newP=\"${{ parameters.REPLACE_NEW_PHONE }}\"; var u=d.users.findOne({email_id:oldE}); if(!u){ print(\"OLD not found: \"+oldE+\" — no change\"); } else if(d.users.countDocuments({email_id:newE})>0){ print(\"NEW email already exists: \"+newE+\" — aborting, no change\"); } else { print(\"BEFORE:\"); printjson(d.users.findOne({_id:u._id},{email_id:1,username:1,phone_number:1})); var set={email_id:newE, phone_number:newP, update_date:new Date()}; if(u.username===oldE){ set.username=newE; } var r=d.users.updateOne({_id:u._id},{\$set:set}); print(\"matched=\"+r.matchedCount+\" modified=\"+r.modifiedCount); print(\"AFTER:\"); printjson(d.users.findOne({_id:u._id},{email_id:1,username:1,phone_number:1})); }' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod replemail -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs replemail -n adp 2>&1 | tail -30
-            kubectl delete pod replemail -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod replemail -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs replemail -n adp-preprod 2>&1 | tail -30
+            kubectl delete pod replemail -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "The account now logs in with the new email; password is unchanged. If they forgot it, use Forgot Password with the NEW email + NEW phone."
@@ -1739,16 +1739,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod addadmin -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run addadmin -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod addadmin -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run addadmin -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var email=\"${{ parameters.ADMIN_EMAIL }}\"; var phone=\"${{ parameters.ADMIN_PHONE }}\"; if(d.users.countDocuments({email_id:email})>0){ print(\"admin already exists: \"+email+\" — no change\"); } else { var ar=d.roles.findOne({role_type:\"Admin\"}); if(!ar){ print(\"ERROR: Admin role not found\"); } else { var rid=String(ar._id); var doc={ name:\"Admin\", username:email, email_id:email, phone_number:phone, password:\"\$argon2id\$v=19\$m=65536,t=3,p=1\$eVvjtXvD9kSjxZFerWhEvQ\$jBPOk2wPZRO10PFmXOkSE91XSU2cdAh57jpaqFOSngk\", role_id:rid, active:true, otp:{otp_attempt:0}, otp_verified:false, password_temporary:true, is_first_time_login:true, verificationStatus:\"ACTIVE\", role_meta_data:{}, number_of_login:0, create_date:new Date(), update_date:new Date(), _class:\"com.adp.users.entity.User\" }; var r=d.users.insertOne(doc); print(\"created admin _id=\"+r.insertedId+\" role_id=\"+rid+\" (Admin)\"); printjson(d.users.findOne({email_id:email},{email_id:1,phone_number:1,role_id:1,verificationStatus:1,active:1})); } }' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod addadmin -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs addadmin -n adp 2>&1 | tail -30
-            kubectl delete pod addadmin -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod addadmin -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs addadmin -n adp-preprod 2>&1 | tail -30
+            kubectl delete pod addadmin -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Next: the admin opens the login page -> Forgot Password -> enters ${{ parameters.ADMIN_EMAIL }} + phone ${{ parameters.ADMIN_PHONE }} to set a password (OTP is emailed)."
@@ -1776,16 +1776,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod vfychk -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run vfychk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod vfychk -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run vfychk -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var roles={}; d.roles.find({},{role_type:1}).forEach(function(r){roles[String(r._id)]=r.role_type;}); var tot=0, byStatus={}; print(\"=== flag | email | role | verificationStatus ===\"); d.users.find({},{email_id:1,role_id:1,verificationStatus:1}).forEach(function(u){ tot++; var rt=roles[String(u.role_id)]||\"(no role)\"; var vs=u.verificationStatus||\"(none)\"; byStatus[vs]=(byStatus[vs]||0)+1; var flag=(String(vs).toUpperCase()===\"ACTIVE\")?\"OK        \":\"NOT-ACTIVE\"; print(\"  \"+flag+\" | \"+(u.email_id||u._id)+\" | \"+rt+\" | \"+vs); }); print(\"---- totals: \"+tot+\" users ----\"); Object.keys(byStatus).forEach(function(k){print(\"  \"+k+\": \"+byStatus[k]);});' >/dev/null 2>&1
-            for i in \$(seq 1 40); do ph=\$(kubectl get pod vfychk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs vfychk -n adp 2>&1 | tail -80
-            kubectl delete pod vfychk -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod vfychk -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs vfychk -n adp-preprod 2>&1 | tail -80
+            kubectl delete pod vfychk -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "Interpretation:"
@@ -1819,16 +1819,16 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            MURI=\$(kubectl get secret adp-secrets -n adp-preprod -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
             if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
-            kubectl delete pod uidfix -n adp --ignore-not-found >/dev/null 2>&1
-            kubectl run uidfix -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+            kubectl delete pod uidfix -n adp-preprod --ignore-not-found >/dev/null 2>&1
+            kubectl run uidfix -n adp-preprod --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
               --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
               --command -- \
               mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var toFix=[]; d.users.find().forEach(function(u){ if(typeof u._id===\"string\") toFix.push(u); }); print(\"users with string _id to convert: \"+toFix.length); if(toFix.length>0){ d.users_idfix_bak.drop(); toFix.forEach(function(u){ d.users_idfix_bak.insertOne(u); }); print(\"backed up \"+toFix.length+\" user(s) to users_idfix_bak\"); } var changed=0,skip=0; toFix.forEach(function(u){ var sid=u._id; if(!/^[0-9a-fA-F]{24}\$/.test(sid)){ print(\"  SKIP non-hex: \"+sid); skip++; return; } var oid=ObjectId(sid); if(d.users.countDocuments({_id:oid})>0){ print(\"  SKIP collision: \"+sid); skip++; return; } var doc=Object.assign({},u); doc._id=oid; d.users.deleteOne({_id:sid}); d.users.insertOne(doc); changed++; print(\"  converted \"+(u.email_id||u.username||\"\")+\"  \"+sid); }); print(\"converted \"+changed+\" user(s) String -> ObjectId; skipped \"+skip); var rem=0; d.users.find().forEach(function(u){ if(typeof u._id===\"string\") rem++; }); print(\"users with string _id remaining = \"+rem);' >/dev/null 2>&1
-            for i in \$(seq 1 60); do ph=\$(kubectl get pod uidfix -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
-            kubectl logs uidfix -n adp 2>&1 | tail -80
-            kubectl delete pod uidfix -n adp --ignore-not-found >/dev/null 2>&1
+            for i in \$(seq 1 60); do ph=\$(kubectl get pod uidfix -n adp-preprod -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs uidfix -n adp-preprod 2>&1 | tail -80
+            kubectl delete pod uidfix -n adp-preprod --ignore-not-found >/dev/null 2>&1
           "
         echo ""
         echo "AFTER 'remaining = 0' means every user is ObjectId-keyed. Backup kept in adp_users.users_idfix_bak."
@@ -1869,10 +1869,10 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
           --command "
-            kubectl set env deployment/adp-users -n adp AZURE_STORAGE_SAS_URL=\"$SAS\"
-            kubectl rollout status deployment/adp-users -n adp --timeout=300s || true
+            kubectl set env deployment/adp-users -n adp-preprod AZURE_STORAGE_SAS_URL=\"$SAS\"
+            kubectl rollout status deployment/adp-users -n adp-preprod --timeout=300s || true
             echo '--- effective upload target on new pod (host only, SAS hidden) ---'
-            kubectl get deployment adp-users -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"AZURE_STORAGE_SAS_URL\")].value}' | sed 's/?.*/?<sas-hidden>/'; echo
+            kubectl get deployment adp-users -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"AZURE_STORAGE_SAS_URL\")].value}' | sed 's/?.*/?<sas-hidden>/'; echo
           "
         echo ""
         echo "Now add a new vehicle as the seller, then re-run VERIFY_SELLER_VEHICLE_BLOBS=true — the newest should show PROD."
