@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: adp-preprod
-  labels:
-    app.kubernetes.io/part-of: adp-platform
-    app.kubernetes.io/environment: preprod
