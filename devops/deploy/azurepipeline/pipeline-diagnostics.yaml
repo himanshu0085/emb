@@ -1,0 +1,1960 @@
+# ============================================================
+#  ADP Platform – Diagnostics Pipeline (Production)
+#  Trigger: Manual only
+#
+#  Each parameter below gates one step (manual, opt-in). See displayName for what each does.
+# ============================================================
+trigger: none
+
+parameters:
+  - name: HEALTH_CHECK
+    displayName: 'Health check — pod status, frontend env, auth errors'
+    type: boolean
+    default: false
+
+  - name: ORDERS_LOGS
+    displayName: 'Orders logs — recent errors, cart state, inventory logs, MongoDB orders'
+    type: boolean
+    default: false
+
+  - name: FIX_INVENTORY_CONFIG
+    displayName: 'Fix inventory k8s config — correct Redis env names (REDIS_HOST/PORT/PASSWORD), increase memory to 1024Mi, add USERS_SERVICE_URL + CHAT_SERVICE_URL, 2 replicas. Fixes detail page slowness.'
+    type: boolean
+    default: false
+
+  - name: FIX_CHAT_CONFIG
+    displayName: 'Fix chat k8s config — add USERS_SERVICE_URL + INVENTORY_SERVICE_URL direct k8s DNS. Fixes empty negotiations list for sellers + negotiation load time.'
+    type: boolean
+    default: false
+
+  - name: APPLY_NETWORK_POLICY
+    displayName: 'Apply network-policy.yaml (full kubectl apply) + verify chat is allowed to inventory & users. Fixes chat enrichment connect-timeouts (empty/slow negotiations).'
+    type: boolean
+    default: false
+
+  - name: APPLY_INGRESS
+    displayName: 'Apply ingress.yaml + verify /statemachine route. Fixes Submit Proposal (state-machine config 404 at the ingress).'
+    type: boolean
+    default: false
+
+  - name: RESTART_FRONTEND
+    displayName: 'Restart adp-frontend — clears Next.js server-side fetch cache (e.g. stale 404 state-machine config after the ingress fix).'
+    type: boolean
+    default: false
+
+  - name: FIX_ORDERS_COMMS_URL
+    displayName: 'Fix order emails — set COMMUNICATION_SERVICE_URL on adp-orders + restart (orders uses unresolvable lb:// so buyer/seller order emails fail).'
+    type: boolean
+    default: false
+
+  - name: DIAGNOSE_COMMUNICATION
+    displayName: 'Diagnose communication crash — startup logs of crash-looping adp-communication pods (the new image is not becoming ready).'
+    type: boolean
+    default: false
+
+  - name: FIX_COMM_SERVICEBUS_ENV
+    displayName: 'Fix communication crash — add AZURE_SERVICE_BUS_CONNECTION_STRING_COMM env (from adp-secrets) to adp-communication + restart. Fixes "Could not resolve placeholder AZURE_SERVICE_BUS_CONNECTION_STRING_COMM" crash-loop blocking admin-CC + new templates.'
+    type: boolean
+    default: false
+
+  - name: FIX_MASTERS_NETPOL
+    displayName: 'Fix detail page slowness — allow adp-inventory ingress on the masters NetworkPolicy. Inventory calls adp-masters-service:8085/api/filters/by-name on detail load; it is blocked -> ~10s connect-timeout per page.'
+    type: boolean
+    default: false
+
+  - name: DIAGNOSE_DETAIL_PAGE
+    displayName: 'Diagnose detail page slowness — tail adp-inventory logs for Redis/cache waits, connect timeouts, slow calls (reload a vehicle detail page first)'
+    type: boolean
+    default: false
+
+  - name: INVENTORY_CACHE
+    displayName: 'Inventory cache toggle — type "none" to stop the Redis cache wait or "redis" to restore. Leave as "skip" to NOT touch inventory (anything other than none/redis is ignored).'
+    type: string
+    default: 'skip'
+
+  - name: VERIFY_SELLER_ROLE
+    displayName: 'Verify seller role (READ ONLY) — print the "Chinese Seller" role exportLicenseNo/exportLicenseUrl mandatory flags from MongoDB. Run this BEFORE changing anything.'
+    type: boolean
+    default: false
+
+  - name: FIX_SELLER_ROLE
+    displayName: 'Fix seller role — set exportLicenseNo/exportLicenseUrl mandatory=false on the "Chinese Seller" role so seller signup (now without export license) is not blocked.'
+    type: boolean
+    default: false
+
+  - name: DIAGNOSE_NEGOTIATION_EMAIL
+    displayName: 'Diagnose negotiation email — chat + comm logs for the seller "new proposal" mail. Send a fresh buyer proposal first, then run this.'
+    type: boolean
+    default: false
+
+  - name: FIX_CHAT_COMMS_URL
+    displayName: 'Fix negotiation emails — set COMMUNICATION_SERVICE_URL on adp-chat + restart (chat uses unresolvable lb:// so seller proposal/counter emails fail silently).'
+    type: boolean
+    default: false
+
+  - name: VERIFY_STATE_MESSAGES
+    displayName: 'Verify state messages (READ ONLY) — list negotiation_state_messages (stateCode + defaultMessages) from adp_statemachine. Explains the "Status updated." fallback.'
+    type: boolean
+    default: false
+
+  - name: FIX_CHAT_STATEMACHINE_URL
+    displayName: 'Fix "Status updated." — set STATEMACHINE_SERVICE_URL on adp-chat + restart (chat uses unresolvable lb:// so getTransitionConfig fails and falls back to generic text).'
+    type: boolean
+    default: false
+
+  - name: SHOW_BLOB_MIGRATION_PLAN
+    displayName: 'Show blob migration runbook (READ ONLY) — prints the AzCopy + MongoDB URL-rewrite steps to move images from pre-prod to the prod account (azamppruaenstg) and lists the prod containers. No input.'
+    type: boolean
+    default: false
+
+  - name: VERIFY_SELLER_VEHICLE_BLOBS
+    displayName: 'Verify seller vehicle images (READ ONLY): for BLOB_CHECK_EMAIL, list their most recent vehicles and show whether each imageUrl points to the PROD blob (azamppruaenstg / prod-blob-adp-bucket) or the OLD pre-prod blob (preprodblobadp). Confirms new uploads land in the production ADPG storage.'
+    type: boolean
+    default: false
+
+  - name: BLOB_CHECK_EMAIL
+    displayName: 'Seller email to check vehicle image storage (used when VERIFY_SELLER_VEHICLE_BLOBS=true).'
+    type: string
+    default: 'sahil.sethi@emb.global'
+
+  - name: SHOW_BLOB_VARS
+    displayName: 'Show blob storage variables (READ ONLY) — print which adp-secrets-prod blob variable is usable for uploads (host/container shown, SAS token hidden). Run this first to decide the value for uploads.'
+    type: boolean
+    default: false
+
+  - name: FIX_UPLOAD_SAS
+    displayName: 'Fix upload target — set AZURE_STORAGE_SAS_URL on adp-users so NEW uploads go to the production blob instead of pre-prod. Uses BLOB_SAS_URL if provided, else the adp-secrets-prod variable AZURE_BLOB_SAS_URL. Must be a CONTAINER-scoped SAS.'
+    type: boolean
+    default: false
+
+  - name: BLOB_SAS_URL
+    displayName: 'Container-scoped prod SAS to set on adp-users (optional). Paste it here if the group variable AZURE_BLOB_SAS_URL does not resolve. The value is non-secret (it is a scoped, expiring SAS). Leave blank to use the group variable.'
+    type: string
+    default: ''
+
+  - name: DIAGNOSE_SELLER_GOLIVE
+    displayName: 'Diagnose listing not going live (READ ONLY): for SELLER_EMAIL, print the user verificationStatus and the status of their vehicles. A listing only goes LIVE when the seller is verificationStatus=ACTIVE; otherwise InventoryServiceImpl forces the listing to DRAFT and it stays hidden from public listings (which require status=LIVE).'
+    type: boolean
+    default: false
+
+  - name: SELLER_EMAIL
+    displayName: 'Seller email to diagnose (used when DIAGNOSE_SELLER_GOLIVE=true). The seller whose listing does NOT go live.'
+    type: string
+    default: 'abtamf@gmail.com'
+
+  - name: SELLER_EMAIL_CONTROL
+    displayName: 'Working seller email for comparison (optional control). Set to none to skip.'
+    type: string
+    default: 'sahil.sethi@emb.global'
+
+  - name: FIX_SELLER_VERIFICATION
+    displayName: 'Fix seller go-live (WRITE): set verificationStatus=ACTIVE for FIX_SELLER_EMAIL in adp_users.users so future listings can go LIVE. Run DIAGNOSE_SELLER_GOLIVE first to confirm.'
+    type: boolean
+    default: false
+
+  - name: FIX_SELLER_EMAIL
+    displayName: 'Seller email to verify/approve (used when FIX_SELLER_VERIFICATION=true).'
+    type: string
+    default: 'abtamf@gmail.com'
+
+  - name: PROMOTE_SELLER_DRAFTS
+    displayName: 'Also promote that seller existing DRAFT vehicles to LIVE (WRITE) and trigger an Elasticsearch reindex so they appear in public listings. Only applied when FIX_SELLER_VERIFICATION=true.'
+    type: boolean
+    default: false
+
+  - name: CHECK_USER_ROLES
+    displayName: 'Check user roles (READ ONLY) — for CHECK_ROLE_EMAIL, print role_id and whether it resolves to a role; then list ALL users and flag any whose role_id is missing or does not match a role in the roles collection (empty roleType -> logs in with no role, no dashboard).'
+    type: boolean
+    default: false
+
+  - name: CHECK_ROLE_EMAIL
+    displayName: 'Account email to diagnose in detail (used when CHECK_USER_ROLES=true). Set to none to only list all users.'
+    type: string
+    default: 'none'
+
+  - name: DIAGNOSE_USERINFO
+    displayName: 'Diagnose user-info read path (READ ONLY) — tail adp-authentication + adp-users logs for get-by-id / getUserInfoByToken / errors. Reproduce first: log in as the affected account and open any page, THEN run this. Explains an empty role badge / no dashboard when the stored role_id is correct.'
+    type: boolean
+    default: false
+
+  - name: DIAGNOSE_ROLE_ID_TYPE
+    displayName: 'Diagnose role _id type (READ ONLY) — Spring Data auto-converts a 24-hex String @Id to ObjectId at query time, so roleRepository.findById(role_id) runs {_id: ObjectId(...)}. If roles._id is stored as a String (e.g. after a JSON import), that query matches nothing -> roleType never attached -> empty role badge, no dashboard. Prints sample _id types and, for CHECK_ROLE_EMAIL, the STRING-match vs OBJECTID-match counts. OBJECTID-match is what the app actually does.'
+    type: boolean
+    default: false
+
+  - name: FIX_ROLE_ID_TYPE
+    displayName: 'Fix role _id type (WRITE) — normalize roles._id from String to ObjectId(hex) so Spring roleRepository.findById(role_id) resolves. No user records change (role_id stays the same hex string; Spring converts it to ObjectId to match). Run DIAGNOSE_ROLE_ID_TYPE first. Idempotent (skips roles already ObjectId-keyed). Backs up to roles_idfix_bak.'
+    type: boolean
+    default: false
+
+  - name: FIX_USER_ID_TYPE
+    displayName: 'Fix user _id type (WRITE) — convert imported users._id from String to ObjectId(hex) so Spring userRepository.findById(userId) resolves (recovers old accounts that log in but show "User not found" / no data). String references like vehicles.createdBy are unaffected (they stay the same hex string). Backs up to users_idfix_bak. Idempotent (skips users already ObjectId-keyed). Run FIX_ROLE_ID_TYPE too.'
+    type: boolean
+    default: false
+
+  - name: CHECK_VERIFICATION
+    displayName: 'Check account verification (READ ONLY) — list every account with role + verificationStatus, flagging any that are NOT ACTIVE. A seller must be ACTIVE for listings to go LIVE; a buyer must be ACTIVE for the negotiate/quote button to enable. Prints per-account status and a totals summary by status.'
+    type: boolean
+    default: false
+
+  - name: ADD_ADMIN
+    displayName: 'Add admin account (WRITE) — create an Admin-role user (verificationStatus=ACTIVE) for ADMIN_EMAIL / ADMIN_PHONE. Password is set to a random unusable value; the admin then uses Forgot Password (email + phone) to set their own. Skips if the email already exists.'
+    type: boolean
+    default: false
+
+  - name: ADMIN_EMAIL
+    displayName: 'Admin email to create (used when ADD_ADMIN=true).'
+    type: string
+    default: 'admin@globalautotrade.com'
+
+  - name: ADMIN_PHONE
+    displayName: 'Admin phone incl. country code, exactly as it will be entered for Forgot Password (used when ADD_ADMIN=true).'
+    type: string
+    default: '+971543199720'
+
+  - name: BULK_VERIFY_ACTIVE
+    displayName: 'Bulk verify (WRITE) — set verificationStatus=ACTIVE for ALL accounts except those in BULK_VERIFY_EXCLUDE. Enables seller listings to go LIVE and buyer negotiate/quote for everyone not excluded. (Existing DRAFT listings still need a re-save; use FIX_SELLER_VERIFICATION + PROMOTE_SELLER_DRAFTS per seller to auto-promote.)'
+    type: boolean
+    default: false
+
+  - name: BULK_VERIFY_EXCLUDE
+    displayName: 'Comma-separated emails to EXCLUDE from bulk verify (kept as-is).'
+    type: string
+    default: 'abdelrahman.farid@safeen.ae,abtamf@gmail.com'
+
+  - name: REPLACE_USER_EMAIL
+    displayName: 'Replace account email/phone (WRITE) — change REPLACE_OLD_EMAIL to REPLACE_NEW_EMAIL and set REPLACE_NEW_PHONE (updates email_id, username, phone_number). Aborts if old not found or new email already exists.'
+    type: boolean
+    default: false
+
+  - name: REPLACE_OLD_EMAIL
+    displayName: 'Existing account email to change (used when REPLACE_USER_EMAIL=true).'
+    type: string
+    default: 'sahil.sethi@emb.global'
+
+  - name: REPLACE_NEW_EMAIL
+    displayName: 'New email for that account (used when REPLACE_USER_EMAIL=true).'
+    type: string
+    default: 'romanyanoc@hotmail.com'
+
+  - name: REPLACE_NEW_PHONE
+    displayName: 'New phone incl. country code for that account (used when REPLACE_USER_EMAIL=true).'
+    type: string
+    default: '+8615726683711'
+
+  - name: WIPE_BUSINESS_DATA
+    displayName: 'WIPE all business data (WRITE, DESTRUCTIVE, NO BACKUP) — empty vehicles/inventory/cart/favourites/insurance/quote_builder/tracking (adp_inventory), negotiations/negotiation/negotiation_history/chat_messages (adp_chat), and orders (adp_orders). KEEPS users, roles, profiles, bank details, statemachine config, masters, and ports. ES auto-clears via the inventory change-stream. Requires WIPE_CONFIRM=ERASE-ALL.'
+    type: boolean
+    default: false
+
+  - name: WIPE_CONFIRM
+    displayName: 'Type ERASE-ALL to confirm WIPE_BUSINESS_DATA. Any other value aborts with no changes.'
+    type: string
+    default: ''
+
+  - name: CLEAR_ES_LISTINGS
+    displayName: 'Clear Elasticsearch listings (WRITE) — delete_by_query match_all on the adp_inventory and adp_inventory_items indices so public search/listings go empty. Prints before/after doc counts. Safe no-op if already empty. Use after WIPE_BUSINESS_DATA if the storefront still shows cars.'
+    type: boolean
+    default: false
+
+  - name: REINDEX_INVENTORY_ES
+    displayName: 'Reindex inventory to Elasticsearch (WRITE) — POST /api/v1/inventory/reindex-all so ES matches Mongo. Fixes a SOLD car still showing as available (the change-stream did not sync the status). Re-adds LIVE cars and updates SOLD/LOCKED so listings reflect reality.'
+    type: boolean
+    default: false
+
+  - name: DIAGNOSE_ES_SYNC
+    displayName: 'Diagnose Mongo->ES sync (READ ONLY) — proves why status changes do not reflect: prints change-stream-status, ES vehicle counts by status (LIVE/LOCKED/SOLD/DRAFT), Mongo counts by status for comparison, and tails adp-inventory for sync/change-stream log lines. A SOLD car counted LIVE in ES but SOLD in Mongo confirms the status-update path never syncs ES.'
+    type: boolean
+    default: false
+
+  - name: DIAGNOSE_SOLD
+    displayName: 'Diagnose LOCKED/SOLD status (READ ONLY) — the reserve step (adp-chat -> "LOCKED" on price lock) and the sale step (adp-orders -> "SOLD" on order) both call inventory PUT /status-update. Prints INVENTORY_SERVICE_URL on both adp-chat and adp-orders, tails both services logs for the LOCKED/SOLD calls + errors, tails adp-inventory for received status-update, and shows recent orders + each vehicle current status + a LIVE/LOCKED/SOLD breakdown.'
+    type: boolean
+    default: false
+
+  - name: FIX_ORDERS_INVENTORY_URL
+    displayName: 'Fix SOLD path (WRITE) — set INVENTORY_SERVICE_URL=http://adp-inventory-service:8084 on adp-orders + restart, so the SOLD status call resolves. Fixes future orders. (Already-placed orders vehicles stay LIVE/LOCKED until re-marked — use MARK_VEHICLE_SOLD.)'
+    type: boolean
+    default: false
+
+  - name: FIX_CHAT_INVENTORY_URL
+    displayName: 'Fix LOCKED path (WRITE) — set INVENTORY_SERVICE_URL=http://adp-inventory-service:8084 on adp-chat + restart, so the "LOCKED" reserve call (on negotiation price-lock) resolves. Confirm with DIAGNOSE_SOLD first.'
+    type: boolean
+    default: false
+
+  - name: MARK_VEHICLE_SOLD
+    displayName: 'One-off: mark an already-ordered vehicle SOLD (WRITE). Set MARK_SOLD_VEHICLE_ID to the vehicle _id (hex) to set its status to SOLD in adp_inventory. Use for a car that was ordered before FIX_ORDERS_INVENTORY_URL was applied.'
+    type: boolean
+    default: false
+
+  - name: MARK_SOLD_VEHICLE_ID
+    displayName: 'Vehicle _id (hex) to mark SOLD (used when MARK_VEHICLE_SOLD=true).'
+    type: string
+    default: ''
+
+variables:
+  - group: adp-secrets-prod
+  - name: RESOURCE_GROUP
+    value: az-emb-pr-uaen-automarketplace-aks-rg
+  - name: CLUSTER_NAME
+    value: az-automotivemarketplace-pr-uaen-aks
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+
+  # Checkout required only for FIX_INVENTORY_CONFIG / FIX_CHAT_CONFIG (need yaml files for --file flag)
+  - checkout: self
+    path: devops
+    condition: or(eq('${{ parameters.FIX_INVENTORY_CONFIG }}', 'true'), eq('${{ parameters.FIX_CHAT_CONFIG }}', 'true'))
+
+  # ── Health check ──
+  - task: AzureCLI@2
+    displayName: 'Health check — pods, frontend env, auth errors (set HEALTH_CHECK=true)'
+    condition: eq('${{ parameters.HEALTH_CHECK }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## ALL PODS ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl get pods -n adp -o wide" || true
+
+        echo "########## FRONTEND — image + env vars ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl describe deployment adp-frontend -n adp | grep -A5 'Image:\|Environment:\|INTERNAL_API'" || true
+
+        echo "########## AUTHENTICATION — errors + Redis + refresh ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-authentication -n adp --tail=200 2>&1 | grep -iE 'ERROR|Exception|redis|refresh|500|NullPointer|Connection|timeout|expired|invalid' | grep -v 'HikariPool\|Eureka\|HeartBeat' | tail -40 || echo 'No auth errors'" || true
+  - task: AzureCLI@2
+    displayName: 'Orders logs — recent errors + cart state + MongoDB orders (set ORDERS_LOGS=true)'
+    condition: eq('${{ parameters.ORDERS_LOGS }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            ORDERS_POD=\$(kubectl get pod -n adp -l app=adp-orders -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            ORDERS_POD2=\$(kubectl get pod -n adp -l app=adp-orders -o jsonpath='{.items[1].metadata.name}' 2>/dev/null)
+            INV_POD=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            if [ -z \"\$ORDERS_POD\" ]; then echo 'ERROR: no orders pod found'; exit 1; fi
+            echo \"Orders pod 1: \$ORDERS_POD\"
+            echo \"Orders pod 2: \$ORDERS_POD2\"
+            echo \"Inventory pod: \$INV_POD\"
+
+            echo ''
+            echo '=== Orders pod 1 env — service URLs (Eureka bypass check) ==='
+            kubectl exec -n adp \$ORDERS_POD -- env 2>/dev/null \
+              | grep -iE 'INVENTORY_SERVICE_URL|NEGOTIATION_SERVICE_URL|USERS_SERVICE_URL' \
+              || echo '(direct service URLs not set — Eureka still in use)'
+
+            echo ''
+            echo '=== Orders logs pod 1 — recent errors + place-order flow ==='
+            kubectl logs \$ORDERS_POD -n adp --tail=300 2>/dev/null \
+              | grep -iE 'ERROR|WARN|placeOrder|processCart|cartId|negotiation|vehicle|clearCart|buildOrder|order.*saved|Failed|exception' \
+              | grep -v 'HikariPool\|Eureka\|HeartBeat\|ConfigCluster' \
+              | tail -60 || echo '(no matching log lines)'
+
+            echo ''
+            echo '=== Orders logs pod 2 — recent errors ==='
+            if [ -n \"\$ORDERS_POD2\" ]; then
+              kubectl logs \$ORDERS_POD2 -n adp --tail=300 2>/dev/null \
+                | grep -iE 'ERROR|WARN|placeOrder|processCart|cartId|negotiation|vehicle|clearCart|buildOrder|Failed|exception' \
+                | grep -v 'HikariPool\|Eureka\|HeartBeat\|ConfigCluster' \
+                | tail -60 || echo '(no matching log lines)'
+            fi
+
+            echo ''
+            echo '=== Active carts in inventory ==='
+            kubectl exec -n adp \$INV_POD -- wget -qO- \
+              'http://localhost:8084/api/v1/inventory/v2/getAllCarts?page=0&size=10' 2>&1 \
+              | tr ',' '\n' | grep -iE 'cartId|negotiationId|vehicleId|status' | head -40 \
+              || echo '(endpoint not available)'
+
+            echo ''
+            echo '=== Inventory logs — cart/order activity ==='
+            kubectl logs \$INV_POD -n adp --tail=200 2>/dev/null \
+              | grep -iE 'cart|order|sold|locked|placeOrder|clearCart|updateStatus|ERROR' \
+              | grep -v 'HikariPool\|Eureka\|HeartBeat\|ConfigCluster' \
+              | tail -40 || echo '(no matching log lines)'
+
+            echo ''
+            echo '=== Orders-to-inventory connectivity test ==='
+            kubectl exec -n adp \$ORDERS_POD -- wget -qO- \
+              --timeout=5 http://adp-inventory-service:8084/actuator/health 2>&1 \
+              | head -3 || echo '(connectivity test failed)'
+          " || true
+  - task: AzureCLI@2
+    displayName: 'Fix inventory config — Redis env names + memory 1024Mi + direct service URLs (set FIX_INVENTORY_CONFIG=true)'
+    condition: eq('${{ parameters.FIX_INVENTORY_CONFIG }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX INVENTORY K8S CONFIG ##########"
+        echo "Fixes:"
+        echo "  1. Redis env names: SPRING_DATA_REDIS_* -> REDIS_* (application.properties reads REDIS_HOST not SPRING_DATA_REDIS_HOST)"
+        echo "     Without this, Redis connects to localhost:6379 — every @Cacheable call waits 2s on failure"
+        echo "  2. Memory limit: 384Mi -> 1024Mi (pod was GC-thrashing)"
+        echo "  3. Add USERS_SERVICE_URL + CHAT_SERVICE_URL (direct k8s DNS, bypasses Eureka)"
+        echo "  4. 2 replicas, imagePullSecrets, livenessProbe"
+
+        echo ""
+        echo "=== Applying k8s/backend/inventory.yaml ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl apply -f inventory.yaml -n adp" \
+          --file $(Pipeline.Workspace)/devops/k8s/backend/inventory.yaml
+
+        echo ""
+        echo "=== Rolling restart of adp-inventory ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl rollout restart deployment/adp-inventory -n adp && kubectl rollout status deployment/adp-inventory -n adp --timeout=300s"
+
+        echo ""
+        echo "=== Verify env vars on new pod ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            INV_POD=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            echo \"Pod: \$INV_POD\"
+            kubectl exec -n adp \$INV_POD -- env 2>/dev/null \
+              | grep -E 'REDIS_HOST|REDIS_PORT|REDIS_SSL|USERS_SERVICE_URL|CHAT_SERVICE_URL|JAVA_OPTS' \
+              || echo '(could not read env — pod may still be starting)'
+          " || true
+
+        echo "✅ Inventory config fix applied"
+
+  # ── Fix chat k8s config (FIX_CHAT_CONFIG=true) ──
+  - task: AzureCLI@2
+    displayName: 'Fix chat config — add USERS_SERVICE_URL + INVENTORY_SERVICE_URL (fixes empty negotiations for sellers) (set FIX_CHAT_CONFIG=true)'
+    condition: eq('${{ parameters.FIX_CHAT_CONFIG }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX CHAT K8S CONFIG ##########"
+        echo "Fixes:"
+        echo "  1. Add USERS_SERVICE_URL=http://adp-users-service:8087"
+        echo "  2. Add INVENTORY_SERVICE_URL=http://adp-inventory-service:8084"
+        echo ""
+        echo "Root cause of empty negotiations:"
+        echo "  fetchUserRole() calls users service via lb://adp-users-service (Eureka default)"
+        echo "  If Eureka is slow/stale, fetchUserRole() times out -> defaults to ROLE_BUYER"
+        echo "  Sellers then query by buyerId -> MongoDB returns 0 results -> empty negotiations list"
+        echo ""
+        echo "Root cause of slow negotiations:"
+        echo "  enrichWithVehicleData() calls inventory service per negotiation via lb:// (Eureka)"
+        echo "  N+1 pattern * Eureka latency = very slow for users with many negotiations"
+
+        echo ""
+        echo "=== Applying k8s/backend/chat.yaml ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl apply -f chat.yaml -n adp" \
+          --file $(Pipeline.Workspace)/devops/k8s/backend/chat.yaml
+
+        echo ""
+        echo "=== Rolling restart of adp-chat ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl rollout restart deployment/adp-chat -n adp && kubectl rollout status deployment/adp-chat -n adp --timeout=300s"
+
+        echo ""
+        echo "=== Verify env vars on new pod ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            CHAT_POD=\$(kubectl get pod -n adp -l app=adp-chat -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            echo \"Pod: \$CHAT_POD\"
+            kubectl exec -n adp \$CHAT_POD -- env 2>/dev/null \
+              | grep -E 'USERS_SERVICE_URL|INVENTORY_SERVICE_URL' \
+              || echo '(could not read env — pod may still be starting)'
+          " || true
+
+        echo "✅ Chat config fix applied"
+  - task: AzureCLI@2
+    displayName: 'Apply network-policy.yaml + verify chat->inventory/users allowed (set APPLY_NETWORK_POLICY=true)'
+    condition: eq('${{ parameters.APPLY_NETWORK_POLICY }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## APPLY NETWORK POLICY ##########"
+        echo ""
+        echo "=== Applying inventory + users policies inline (+adp-chat), no repo file dependency ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-only-gateway-to-inventory\n  namespace: adp\nspec:\n  podSelector:\n    matchLabels:\n      app: adp-inventory\n  policyTypes:\n    - Ingress\n  ingress:\n    - from:\n        - podSelector:\n            matchLabels:\n              app: adp-authentication\n        - podSelector:\n            matchLabels:\n              app: adp-orders\n        - podSelector:\n            matchLabels:\n              app: adp-chat\n        - podSelector:\n            matchLabels:\n              app: adp-analytics\n      ports:\n        - protocol: TCP\n          port: 8084\n' | kubectl apply -f -
+            printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-only-gateway-to-users\n  namespace: adp\nspec:\n  podSelector:\n    matchLabels:\n      app: adp-users\n  policyTypes:\n    - Ingress\n  ingress:\n    - from:\n        - podSelector:\n            matchLabels:\n              app: adp-authentication\n        - podSelector:\n            matchLabels:\n              app: adp-inventory\n        - podSelector:\n            matchLabels:\n              app: adp-orders\n        - podSelector:\n            matchLabels:\n              app: adp-chat\n        - podSelector:\n            matchLabels:\n              app: adp-analytics\n      ports:\n        - protocol: TCP\n          port: 8087\n' | kubectl apply -f -
+          "
+
+        echo ""
+        echo "=== Verify adp-chat is now in the inventory + users ingress allowlists ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            echo '--- allow-only-gateway-to-inventory: allowed source apps ---'
+            kubectl get networkpolicy allow-only-gateway-to-inventory -n adp -o jsonpath='{range .spec.ingress[0].from[*]}{.podSelector.matchLabels.app}{\"\n\"}{end}'
+            echo '--- allow-only-gateway-to-users: allowed source apps ---'
+            kubectl get networkpolicy allow-only-gateway-to-users -n adp -o jsonpath='{range .spec.ingress[0].from[*]}{.podSelector.matchLabels.app}{\"\n\"}{end}'
+          "
+
+        echo ""
+        echo "✅ Network policy applied. Both lists above must include 'adp-chat'."
+        echo "   Reload /my-negotiations — enrichment calls to inventory:8084 and users:8087 should now connect,"
+        echo "   the list should populate, and load time should drop (no more 5s connect-timeout per call)."
+
+  # ── Apply ingress + verify /statemachine route (APPLY_INGRESS=true) ──
+  # Submit Proposal needs the state-machine config, fetched at /statemachine/... via the public
+  # domain. The ingress had no /statemachine path -> 404 -> empty config -> dead button.
+  # This applies the corrected ingress (with /statemachine -> adp-authentication:8080) and verifies.
+  - task: AzureCLI@2
+    displayName: 'Apply ingress.yaml + verify /statemachine route (set APPLY_INGRESS=true)'
+    condition: eq('${{ parameters.APPLY_INGRESS }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## APPLY INGRESS ##########"
+        echo "=== Patching live ingress(es) to add /statemachine -> adp-authentication:8080 (if missing) ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            for ING in adp-ingress adp-ingress-private; do
+              kubectl get ingress \$ING -n adp >/dev/null 2>&1 || { echo \"\$ING: not found, skipping\"; continue; }
+              if kubectl get ingress \$ING -n adp -o jsonpath='{.spec.rules[*].http.paths[*].path}' | grep -q '/statemachine'; then
+                echo \"\$ING: /statemachine already present\"
+              else
+                kubectl patch ingress \$ING -n adp --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/rules/0/http/paths/-\",\"value\":{\"path\":\"/statemachine\",\"pathType\":\"Prefix\",\"backend\":{\"service\":{\"name\":\"adp-authentication\",\"port\":{\"number\":8080}}}}}]' && echo \"\$ING: /statemachine added\" || echo \"\$ING: patch failed\"
+              fi
+            done
+          "
+
+        echo ""
+        echo "=== Verify /statemachine is now a routed path on adp-ingress ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl get ingress adp-ingress -n adp -o jsonpath='{range .spec.rules[*].http.paths[*]}{.path}{\" -> \"}{.backend.service.name}{\"\n\"}{end}'"
+
+        echo ""
+        echo "✅ Ingress applied. The list above must include '/statemachine -> adp-authentication'."
+        echo "   Reload the negotiation page and click Submit Proposal — the state-machine config now"
+        echo "   loads (was 404), so the SUBMIT_PROPOSAL transition is available and the button works."
+
+  # ── Restart frontend (RESTART_FRONTEND=true) ──
+  # Next.js caches server-side fetches. The negotiation page cached the empty/404 state-machine
+  # config from before the ingress fix; a browser reload won't clear it. Restarting the pods does.
+  - task: AzureCLI@2
+    displayName: 'Restart adp-frontend — clear Next.js server fetch cache (set RESTART_FRONTEND=true)'
+    condition: eq('${{ parameters.RESTART_FRONTEND }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## RESTART ADP-FRONTEND ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl rollout restart deployment/adp-frontend -n adp && kubectl rollout status deployment/adp-frontend -n adp --timeout=300s"
+
+        echo ""
+        echo "✅ adp-frontend restarted — Next.js server-side fetch cache cleared."
+        echo "   The negotiation page will re-fetch the state-machine config (now routed via the ingress)."
+        echo "   Hard-reload the page and click Submit Proposal."
+  - task: AzureCLI@2
+    displayName: 'Fix order emails — set COMMUNICATION_SERVICE_URL on adp-orders + restart (set FIX_ORDERS_COMMS_URL=true)'
+    condition: eq('${{ parameters.FIX_ORDERS_COMMS_URL }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX ORDER EMAILS (adp-orders -> communication) ##########"
+        echo ""
+        echo "=== Recent order-notification errors in adp-orders logs (before fix) ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-orders -n adp --tail=300 | grep -iE 'Failed to send order notification|communication|notifications/send|lb://|No instances|Order email' | tail -15 || echo '(no matching lines yet)'"
+
+        echo ""
+        echo "=== Setting COMMUNICATION_SERVICE_URL + restarting adp-orders ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl set env deployment/adp-orders -n adp COMMUNICATION_SERVICE_URL=http://adp-communication-service:8084 && kubectl rollout status deployment/adp-orders -n adp --timeout=300s && echo '--- effective value ---' && kubectl get deployment adp-orders -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"COMMUNICATION_SERVICE_URL\")].value}'; echo"
+
+        echo ""
+        echo "✅ adp-orders now points communication.service.url at the direct DNS."
+        echo "   Place a test order and confirm buyer + seller receive the email (admin CC'd)."
+        echo "   NOTE: this is the live config fix; it's also baked into pipeline-prod-orders.yml so it persists."
+
+  # ── Diagnose communication crash (DIAGNOSE_COMMUNICATION=true) ──
+  # The new adp-communication image crash-loops (Exit 1) while the old pod still serves, so the
+  # admin-CC fix + new template never go live. This captures the startup error from a failing pod.
+  - task: AzureCLI@2
+    displayName: 'Diagnose communication crash — startup logs of failing pods (set DIAGNOSE_COMMUNICATION=true)'
+    condition: eq('${{ parameters.DIAGNOSE_COMMUNICATION }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## DIAGNOSE COMMUNICATION CRASH ##########"
+        echo ""
+        echo "=== adp-communication pods (image + ready + restarts) ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl get pods -n adp -l app=adp-communication -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,IMAGE:.spec.containers[0].image"
+
+        echo ""
+        echo "=== startup logs of a crash-looping pod (previous + current) ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            P=\$(kubectl get pods -n adp -l app=adp-communication -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[0].ready}{\"\n\"}{end}' | awk '\$2==\"false\"{print \$1; exit}')
+            echo \"crashing pod: \$P\"
+            echo '--- previous (crashed) container, last 80 lines ---'
+            kubectl logs \$P -n adp --previous --tail=80 2>&1 | tail -70
+            echo '--- current attempt, last 40 lines ---'
+            kubectl logs \$P -n adp --tail=40 2>&1 | tail -40
+          "
+
+        echo ""
+        echo "Interpretation:"
+        echo "  'Connection string has invalid key value pair: \$SB_CONN' / ServiceBus init failure"
+        echo "     -> the Service Bus secret is corrupted; re-patch adp-secrets/SERVICEBUS_CONNECTION_STRING via inject-secrets (from the variable group), then restart comm."
+        echo "  'Could not resolve placeholder AZURE_SERVICE_BUS_CONNECTION_STRING_COMM'"
+        echo "     -> the deployment is missing that env var; run FIX_COMM_SERVICEBUS_ENV=true (below)."
+        echo "  other startup exception -> share the stack trace; it names the failing bean/config."
+
+  # ── Fix communication crash: missing _COMM service bus env (FIX_COMM_SERVICEBUS_ENV=true) ──
+  # The new image runs with SPRING_PROFILES_ACTIVE=staging, which loads application-staging.yml:
+  #   communication.servicebus.connection-string=${AZURE_SERVICE_BUS_CONNECTION_STRING_COMM}
+  # with NO default, so it hard-requires that env var. The deployed communication.yaml only sets
+  # SERVICEBUS_CONNECTION_STRING / AZURE_SERVICE_BUS_CONNECTION_STRING, so the placeholder is
+  # unresolved -> serviceBusConfig bean fails -> pods crash-loop (admin-CC + new templates never go live).
+  # Fix: append AZURE_SERVICE_BUS_CONNECTION_STRING_COMM sourced from the SAME secret key, then restart.
+  # Idempotent: skips if the env var is already present. Value stays in the secret (not the manifest).
+  - task: AzureCLI@2
+    displayName: 'Fix communication crash — add _COMM service bus env + restart (set FIX_COMM_SERVICEBUS_ENV=true)'
+    condition: eq('${{ parameters.FIX_COMM_SERVICEBUS_ENV }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX COMMUNICATION — ADD AZURE_SERVICE_BUS_CONNECTION_STRING_COMM ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            set -e
+            EXISTS=\$(kubectl get deployment adp-communication -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"AZURE_SERVICE_BUS_CONNECTION_STRING_COMM\")].name}')
+            if [ -n \"\$EXISTS\" ]; then
+              echo 'env var AZURE_SERVICE_BUS_CONNECTION_STRING_COMM already present — no patch needed'
+            else
+              echo 'patching deployment: append AZURE_SERVICE_BUS_CONNECTION_STRING_COMM from secret adp-secrets/SERVICEBUS_CONNECTION_STRING'
+              kubectl patch deployment adp-communication -n adp --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/env/-\",\"value\":{\"name\":\"AZURE_SERVICE_BUS_CONNECTION_STRING_COMM\",\"valueFrom\":{\"secretKeyRef\":{\"name\":\"adp-secrets\",\"key\":\"SERVICEBUS_CONNECTION_STRING\"}}}}]'
+            fi
+            echo '--- rollout ---'
+            kubectl rollout restart deployment/adp-communication -n adp
+            kubectl rollout status deployment/adp-communication -n adp --timeout=300s || true
+            echo '--- pods now (ready + restarts + image) ---'
+            kubectl get pods -n adp -l app=adp-communication -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,IMAGE:.spec.containers[0].image
+          "
+
+        echo ""
+        echo "Interpretation:"
+        echo "  all pods 1/1 Ready -> crash fixed; admin-CC + new buyer/seller order templates are now live."
+        echo "  still 0/1 -> re-run DIAGNOSE_COMMUNICATION; if the placeholder error is gone but ServiceBus init"
+        echo "              now fails on the connection string, the secret value itself is bad (re-patch it via inject-secrets from the variable group)."
+
+  # ── Fix detail page slowness: allow inventory -> masters (FIX_MASTERS_NETPOL=true) ──
+  # DIAGNOSE_DETAIL_PAGE proved the ~10s is NOT Redis: adp-inventory's call to
+  #   http://adp-masters-service:8085/api/filters/by-name  -> "Connect timed out"
+  # on every detail-page load. adp-masters is healthy; the allow-only-gateway-to-masters
+  # NetworkPolicy only permits adp-authentication ingress, so inventory's direct call is dropped
+  # and waits out the connect timeout. Fix: add adp-inventory to the masters ingress allowlist.
+  # Idempotent strategic-merge patch (re-applying the same from-rule is a no-op).
+  - task: AzureCLI@2
+    displayName: 'Fix detail page — allow adp-inventory on masters NetworkPolicy (set FIX_MASTERS_NETPOL=true)'
+    condition: eq('${{ parameters.FIX_MASTERS_NETPOL }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX MASTERS NETWORKPOLICY — ALLOW adp-inventory INGRESS ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            kubectl patch networkpolicy allow-only-gateway-to-masters -n adp --type=merge -p '{\"spec\":{\"ingress\":[{\"from\":[{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-authentication\"}}},{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-inventory\"}}}],\"ports\":[{\"protocol\":\"TCP\",\"port\":8085}]}]}}'
+            echo '--- effective masters policy ingress ---'
+            kubectl get networkpolicy allow-only-gateway-to-masters -n adp -o jsonpath='{.spec.ingress[0].from}'; echo
+            echo '--- live connect test: inventory pod -> masters:8085 ---'
+            INV=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}')
+            kubectl exec -n adp \$INV -- sh -c 'wget -q -O - -T 8 http://adp-masters-service:8085/api/filters/by-name 2>&1 | head -5; echo exit=\$?' 2>&1 | head -10
+          "
+
+        echo ""
+        echo "Interpretation:"
+        echo "  connect succeeds (any HTTP response, even 400/404) -> path is open; reload the detail page, it should be fast."
+        echo "  still 'Connect timed out' -> masters not actually listening on 8085, or another policy is denying; share output."
+
+  # ── Diagnose detail page slowness (DIAGNOSE_DETAIL_PAGE=true) ──
+  # The detail page is served by adp-inventory (getInventoryDetails). ~10s is usually a Redis cache
+  # connect-timeout (first @Cacheable call waits out the connect, then falls back to Mongo) OR a slow
+  # downstream call to users/chat. Reload a vehicle detail page, THEN run this.
+  - task: AzureCLI@2
+    displayName: 'Diagnose detail page — adp-inventory Redis/cache/connect-timeout/slow lines (set DIAGNOSE_DETAIL_PAGE=true)'
+    condition: eq('${{ parameters.DIAGNOSE_DETAIL_PAGE }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## DIAGNOSE DETAIL PAGE (adp-inventory) ##########"
+        echo ""
+        echo "=== Redis / cache / connect-timeout / slow lines in adp-inventory ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-inventory -n adp --tail=600 | grep -iE 'redis|lettuce|cache|connect timed out|ResourceAccess|RedisConnectionFailure|Unable to connect|users-service|chat-service|slow|took [0-9]' | tail -40 || echo '(no matching lines — reload a detail page first, then rerun)'"
+
+        echo ""
+        echo "=== Does inventory have a live Redis connection? (startup + Lettuce) ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-inventory -n adp --tail=2000 | grep -iE 'lettuce|redis' | head -20 || echo '(no redis log lines at all — caching may be silently failing on connect)'"
+
+        echo ""
+        echo "Interpretation:"
+        echo "  'connect timed out' / RedisConnectionFailure to the redis host -> Redis unreachable; ~10s connect-timeout per request."
+        echo "  'connect timed out' to users-service/chat-service -> a downstream call in getInventoryDetails is blocked/slow."
+        echo "  No redis lines at all + still 10s -> caching likely failing silently on connect; confirm cache host/port/SSL + reachability."
+  - task: AzureCLI@2
+    displayName: 'Inventory cache toggle — set SPRING_CACHE_TYPE + restart (set INVENTORY_CACHE=none or redis)'
+    condition: or(eq('${{ parameters.INVENTORY_CACHE }}', 'none'), eq('${{ parameters.INVENTORY_CACHE }}', 'redis'))
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        MODE='${{ parameters.INVENTORY_CACHE }}'
+
+        echo "########## INVENTORY CACHE TOGGLE -> $MODE ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            kubectl set env deployment/adp-inventory -n adp SPRING_CACHE_TYPE=$MODE
+            kubectl rollout status deployment/adp-inventory -n adp --timeout=300s
+            echo '--- effective SPRING_CACHE_TYPE on new pod ---'
+            kubectl get deployment adp-inventory -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"SPRING_CACHE_TYPE\")].value}'; echo
+          "
+        echo ""
+        echo "Now reload a vehicle detail page:"
+        echo "  MODE=none  -> if the page is FAST, the Redis cache wait was the ~10s cause."
+        echo "               (leave as a stopgap, or fix Redis reachability then set INVENTORY_CACHE=redis)"
+        echo "  MODE=redis -> caching restored; only do this once Redis is confirmed reachable."
+
+  # ── Verify seller role mandatory flags (VERIFY_SELLER_ROLE=true) — READ ONLY ──
+  # Seller signup no longer sends Export License. v2/create throws "Missing mandatory key
+  # 'exportLicenseNo'" ONLY if that key is mandatory on the "Chinese Seller" role. This prints the
+  # current flags so we know whether FIX_SELLER_ROLE is needed BEFORE changing anything.
+  # Uses a short-lived mongo pod (can reach Atlas); the URI is passed via env, never printed.
+  - task: AzureCLI@2
+    displayName: 'Verify seller role (READ ONLY) — exportLicense mandatory flags (set VERIFY_SELLER_ROLE=true)'
+    condition: eq('${{ parameters.VERIFY_SELLER_ROLE }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## VERIFY SELLER ROLE (Chinese Seller) — READ ONLY ##########"
+        echo "=== Importing mongo:7.0 into ACR (private cluster cannot pull Docker Hub) ==="
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod rolecheck -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run rolecheck -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'const d=db.getSiblingDB(\"adp_users\"); var n=d.roles.countDocuments({}); print(\"adp_users.roles count: \"+n); d.roles.find({},{role_name:1,role_type:1,\"input_values.exportLicenseNo.mandatory\":1,\"input_values.exportLicenseUrl.mandatory\":1}).forEach(function(r){printjson(r);}); if(n===0){print(\"--- databases (roles not in adp_users) ---\"); printjson(db.adminCommand({listDatabases:1}).databases.map(function(x){return x.name;}));}' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolecheck -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            echo '--- Chinese Seller role: exportLicenseNo / exportLicenseUrl ---'
+            kubectl logs rolecheck -n adp 2>&1 | tail -40
+            kubectl delete pod rolecheck -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Interpretation:"
+        echo "  Lists every role in adp_users.roles with its exportLicense mandatory flags."
+        echo "  Find the seller role (look for a Chinese/seller roleName or roleType) and check its flags:"
+        echo "    mandatory: true on either field -> seller signup WILL break without it; run FIX_SELLER_ROLE=true (and tell me the exact roleName if it is not 'Chinese Seller')."
+        echo "    mandatory: false / fields absent -> nothing to do; signup is safe."
+        echo "  'adp_users.roles count: 0' + a database list -> roles live in another DB; share the list and I will retarget."
+        echo "  'ImagePullBackOff' / empty output -> cluster cannot pull mongo:7.0; run the mongosh snippet from Atlas/Compass instead."
+
+  # ── Fix seller role mandatory flags (FIX_SELLER_ROLE=true) ──
+  # Sets exportLicenseNo/exportLicenseUrl mandatory=false on the "Chinese Seller" role so the
+  # two-document seller signup is not rejected. Relaxes (not deletes) the keys, so admin forms and
+  # any older payload that still sends an export license keep validating. Re-prints the flags after.
+  - task: AzureCLI@2
+    displayName: 'Fix seller role — set exportLicense mandatory=false on Chinese Seller (set FIX_SELLER_ROLE=true)'
+    condition: eq('${{ parameters.FIX_SELLER_ROLE }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX SELLER ROLE (Chinese Seller) — relax export license ##########"
+        echo "=== Importing mongo:7.0 into ACR (private cluster cannot pull Docker Hub) ==="
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod rolefix -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run rolefix -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'const d=db.getSiblingDB(\"adp_users\"); printjson(d.roles.updateOne({role_name:\"Chinese Seller\"},{\$set:{\"input_values.exportLicenseNo.mandatory\":false,\"input_values.exportLicenseUrl.mandatory\":false}})); printjson(d.roles.findOne({role_name:\"Chinese Seller\"},{role_name:1,\"input_values.exportLicenseNo\":1,\"input_values.exportLicenseUrl\":1}));' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolefix -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            echo '--- updateOne result + new flags ---'
+            kubectl logs rolefix -n adp 2>&1 | tail -40
+            kubectl delete pod rolefix -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Interpretation:"
+        echo "  modifiedCount: 1 and both mandatory now false -> seller signup is safe without export license."
+        echo "  matchedCount: 0 -> role name differs; check the exact role_name from VERIFY_SELLER_ROLE output."
+
+  # ── Diagnose negotiation email (DIAGNOSE_NEGOTIATION_EMAIL=true) ──
+  # On a buyer proposal (toState BUYER_PROPOSED) the chat service emails the seller
+  # (NEGOTIATION_NEW_PROPOSAL) + confirms to the buyer (NEGOTIATION_PROPOSAL_SENT_BUYER), via
+  # triggerNegotiationEmails -> sendNegotiationMail -> communication service. The whole block is
+  # wrapped in try/catch and SWALLOWS errors, so a failure is silent. SEND A FRESH PROPOSAL, then
+  # run this to see whether chat queued the mail or hit an error, and whether comm sent it.
+  - task: AzureCLI@2
+    displayName: 'Diagnose negotiation email — chat + comm logs for the seller proposal mail (set DIAGNOSE_NEGOTIATION_EMAIL=true)'
+    condition: eq('${{ parameters.DIAGNOSE_NEGOTIATION_EMAIL }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## DIAGNOSE NEGOTIATION EMAIL ##########"
+        echo "=== adp-chat: negotiation email queue / routing errors ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-chat -n adp --tail=600 2>&1 | grep -iE 'Negotiation email|Error routing negotiation|NEGOTIATION_NEW_PROPOSAL|NEGOTIATION_PROPOSAL_SENT|sendNegotiationMail|getUserById|notificationsSender|communication' | tail -40 || echo '(no matching lines — send a fresh proposal, then rerun)'"
+
+        echo ""
+        echo "=== adp-communication: send attempts / template / errors ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-communication -n adp --tail=600 2>&1 | grep -iE 'NEGOTIATION_NEW_PROPOSAL|NEGOTIATION_PROPOSAL_SENT|template|notification|EmailProvider|ACS|sent|failed|error' | tail -40 || echo '(no matching lines)'"
+
+        echo ""
+        echo "Interpretation:"
+        echo "  chat 'Negotiation email (NEGOTIATION_NEW_PROPOSAL) successfully queued' + comm 'sent' -> email IS going; check spam / the seller address."
+        echo "  chat 'Error routing negotiation notification: ...' -> getUserById or email lookup failed (often a null seller email or chat->users block); the message names the cause."
+        echo "  chat queued but comm 'failed'/'template' error -> comm template or ACS send issue for that event type."
+        echo "  neither chat line present -> the proposal did not reach executeTransition (state not BUYER_PROPOSED, or a pre-email exception)."
+
+  # ── Fix negotiation emails: set COMMUNICATION_SERVICE_URL on chat (FIX_CHAT_COMMS_URL=true) ──
+  # Order emails work (orders has COMMUNICATION_SERVICE_URL) but negotiation emails do not, because
+  # adp-chat lacks it and NotificationServiceImpl's plain RestTemplate cannot resolve the default
+  # lb://adp-communication-service. Set the direct k8s DNS URL and restart so chat can reach comm.
+  - task: AzureCLI@2
+    displayName: 'Fix negotiation emails — set COMMUNICATION_SERVICE_URL on adp-chat + restart (set FIX_CHAT_COMMS_URL=true)'
+    condition: eq('${{ parameters.FIX_CHAT_COMMS_URL }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX CHAT -> COMMUNICATION_SERVICE_URL ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            kubectl set env deployment/adp-chat -n adp COMMUNICATION_SERVICE_URL=http://adp-communication-service:8084
+            kubectl rollout status deployment/adp-chat -n adp --timeout=300s || true
+            echo '--- effective COMMUNICATION_SERVICE_URL on new pod ---'
+            kubectl get deployment adp-chat -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"COMMUNICATION_SERVICE_URL\")].value}'; echo
+          "
+        echo ""
+        echo "Now send a fresh buyer proposal and check the seller inbox. Use DIAGNOSE_NEGOTIATION_EMAIL=true"
+        echo "to confirm chat logs 'Negotiation email (NEGOTIATION_NEW_PROPOSAL) successfully queued'."
+
+  # ── Verify state messages (VERIFY_STATE_MESSAGES=true) — READ ONLY ──
+  # The chat info bubble + Status panel read defaultMessages.{info,buyer,seller} from the statemachine
+  # config (adp_statemachine.negotiation_state_messages, keyed by stateCode). When info is blank/missing
+  # chat falls back to the constant "Status updated." This lists what is actually stored per state.
+  - task: AzureCLI@2
+    displayName: 'Verify state messages (READ ONLY) — negotiation_state_messages (set VERIFY_STATE_MESSAGES=true)'
+    condition: eq('${{ parameters.VERIFY_STATE_MESSAGES }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## VERIFY STATE MESSAGES (adp_statemachine.negotiation_state_messages) — READ ONLY ##########"
+        echo "=== Importing mongo:7.0 into ACR (private cluster cannot pull Docker Hub) ==="
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod msgcheck -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run msgcheck -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'const d=db.getSiblingDB(\"adp_statemachine\"); var n=d.negotiation_state_messages.countDocuments({}); print(\"negotiation_state_messages count: \"+n); d.negotiation_state_messages.find({},{stateCode:1,defaultMessages:1,isActive:1}).forEach(function(r){printjson(r);}); print(\"=== USER transitions: fromState -> toState : transitionMessage ===\"); d.negotiation_state_transitions.find({triggeredBy:\"USER\"},{fromState:1,toState:1,transitionMessage:1}).forEach(function(t){print((t.fromState||\"?\")+\" -> \"+(t.toState||\"?\")+\" : \"+(t.transitionMessage||\"(NONE)\"));}); print(\"=== resolve IDLE->BUYER_PROPOSED message (as the app does) ===\"); var tx=d.negotiation_state_transitions.findOne({fromState:\"IDLE\",toState:\"BUYER_PROPOSED\",triggeredBy:\"USER\"}); if(tx){print(\"link=\"+tx.transitionMessage+\" linkType=\"+(tx.transitionMessage instanceof ObjectId?\"ObjectId\":typeof tx.transitionMessage)); var mm=d.negotiation_state_messages.findOne({_id:tx.transitionMessage}); print(\"resolveByRaw=\"+(mm?(\"FOUND info=\"+(mm.defaultMessages&&mm.defaultMessages.info)):\"NOT FOUND\")); var sm=d.negotiation_state_messages.findOne({stateCode:\"BUYER_PROPOSED\",messageType:\"TRANSITION\"}); if(sm){print(\"msgIdType=\"+(sm._id instanceof ObjectId?\"ObjectId\":typeof sm._id)+\" msgId=\"+sm._id);}else{print(\"no BUYER_PROPOSED TRANSITION message doc present\");}} if(n===0){print(\"--- databases ---\"); printjson(db.adminCommand({listDatabases:1}).databases.map(function(x){return x.name;}));}' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod msgcheck -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            echo '--- negotiation_state_messages (stateCode -> defaultMessages) ---'
+            kubectl logs msgcheck -n adp 2>&1 | tail -80
+            kubectl delete pod msgcheck -n adp --ignore-not-found >/dev/null 2>&1
+          "
+
+        echo ""
+        echo "=== LIVE statemachine endpoint chat actually calls (does it return message or null?) ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            FE=\$(kubectl get pod -n adp -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}')
+            echo \"using pod: \$FE\"
+            kubectl exec -n adp \$FE -- wget -q -O - -T 8 'http://adp-statemachine-service:8086/negotiation/state/transition/config?fromState=IDLE&toState=BUYER_PROPOSED&module=NEGOTIATION' 2>&1 | head -60; echo
+          "
+
+        echo ""
+        echo "Interpretation:"
+        echo "  In the endpoint JSON, data.message != null with defaultMessages.info -> resolution works; the message WOULD show (look elsewhere)."
+        echo "  data.message == null while the transition has a transitionMessage id -> findById(String) is NOT matching the ObjectId _id"
+        echo "     (the message _id is ObjectId but the link is a String). That is the 'Status updated.' cause; fix = make the _id/link types consistent."
+        echo "  endpoint returns message OK but chat still shows 'Status updated.' -> chat cannot REACH the statemachine"
+        echo "     (chat defaults to lb://adp-statemachine-service); run FIX_CHAT_STATEMACHINE_URL=true."
+
+  # ── Fix "Status updated." : set STATEMACHINE_SERVICE_URL on chat (FIX_CHAT_STATEMACHINE_URL=true) ──
+  # The statemachine endpoint returns the correct per-transition message, but chat's own server-side
+  # call (stateMachineServiceRestTemplateUtils.getTransitionConfig) defaults to lb://adp-statemachine-service,
+  # which it cannot resolve. getTransitionConfig() then catches the error and returns an empty map, so
+  # formatBroadcastMessage falls back to "Status updated." Setting the direct k8s DNS URL fixes it.
+  - task: AzureCLI@2
+    displayName: 'Fix Status-updated text — set STATEMACHINE_SERVICE_URL on adp-chat + restart (set FIX_CHAT_STATEMACHINE_URL=true)'
+    condition: eq('${{ parameters.FIX_CHAT_STATEMACHINE_URL }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX CHAT -> STATEMACHINE_SERVICE_URL ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            kubectl set env deployment/adp-chat -n adp STATEMACHINE_SERVICE_URL=http://adp-statemachine-service:8086
+            kubectl rollout status deployment/adp-chat -n adp --timeout=300s || true
+            echo '--- effective STATEMACHINE_SERVICE_URL on new pod ---'
+            kubectl get deployment adp-chat -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"STATEMACHINE_SERVICE_URL\")].value}'; echo
+          "
+        echo ""
+        echo "Now run a fresh negotiation transition (propose/counter/accept). The chat/status text should show"
+        echo "the real message (e.g. 'Buyer proposed 4% avg discount, Final: \$6816...') instead of 'Status updated.'"
+        echo "  The chat message comes from the TRANSITION's transitionMessage link, not the state row directly."
+        echo "  USER transition shows ': (NONE)' (e.g. IDLE -> BUYER_PROPOSED) -> link missing; chat falls back to 'Status updated.'"
+        echo "     Fix = set transitionMessage on those transitions to the matching message _id (FIX_STATE_TRANSITION_LINKS)."
+        echo "  USER transition shows a message _id -> link present; if it still shows 'Status updated.' that _id is missing from the messages list above."
+        echo "  count: 0 + database list -> messages live elsewhere; share the list and I will retarget."
+
+  # ── Diagnose listing not going live (DIAGNOSE_SELLER_GOLIVE=true) — READ ONLY ──
+  # Why a listing goes live for one seller but not another:
+  #   InventoryServiceImpl.handleStatusMapping() forces status = DRAFT whenever the seller's
+  #   user.verificationStatus is NOT exactly "ACTIVE" (case-insensitive). Public listings
+  #   (groupingListing / search) only return inventory.status == LIVE. So a seller who is not
+  #   verificationStatus=ACTIVE can create a listing, but it is pinned to DRAFT and never appears.
+  # This step prints, for the failing seller (and an optional control), their verificationStatus
+  # and the status breakdown of their vehicles, so we can confirm the cause without changing anything.
+  # Uses a short-lived mongo pod (can reach Atlas); the URI is passed via the secret, never printed.
+  - task: AzureCLI@2
+    displayName: 'Diagnose listing not going live — verificationStatus + vehicle status per seller (set DIAGNOSE_SELLER_GOLIVE=true)'
+    condition: eq('${{ parameters.DIAGNOSE_SELLER_GOLIVE }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## DIAGNOSE SELLER GO-LIVE — READ ONLY ##########"
+        echo "Failing seller : ${{ parameters.SELLER_EMAIL }}"
+        echo "Control seller : ${{ parameters.SELLER_EMAIL_CONTROL }}"
+        echo "=== Importing mongo:7.0 into ACR (private cluster cannot pull Docker Hub) ==="
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod golivecheck -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run golivecheck -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var emails=[\"${{ parameters.SELLER_EMAIL }}\",\"${{ parameters.SELLER_EMAIL_CONTROL }}\"]; var dbs=db.adminCommand({listDatabases:1}).databases.map(function(x){return x.name;}); print(\"databases: \"+dbs.join(\", \")); emails.forEach(function(email){ if(!email||email===\"none\"){return;} print(\"################ SELLER: \"+email+\" ################\"); var found=false; dbs.forEach(function(dn){ if(found){return;} var d=db.getSiblingDB(dn); var cols; try{cols=d.getCollectionNames();}catch(e){return;} if(cols.indexOf(\"users\")<0){return;} var usr=d.users.findOne({\$or:[{email_id:email},{emailId:email},{email:email},{username:email},{email_id:{\$regex:\"^\"+email+\"\$\",\$options:\"i\"}},{emailId:{\$regex:\"^\"+email+\"\$\",\$options:\"i\"}},{email:{\$regex:\"^\"+email+\"\$\",\$options:\"i\"}},{username:{\$regex:\"^\"+email+\"\$\",\$options:\"i\"}}]}); if(!usr){return;} found=true; print(\"found user in: \"+dn+\".users\"); var vs=usr.verificationStatus; print(\"verificationStatus = \"+vs+(String(vs).toUpperCase()===\"ACTIVE\"?\"  (OK: listings may go LIVE)\":\"  (NOT ACTIVE: new listings are FORCED to DRAFT)\")); var uid=usr._id.toString(); print(\"userId(_id) = \"+uid); var vfound=false; dbs.forEach(function(idn){ var idb=db.getSiblingDB(idn); var ic; try{ic=idb.getCollectionNames();}catch(e){return;} if(ic.indexOf(\"vehicles\")<0){return;} var q={createdBy:{\$in:[uid,email]}}; var total=idb.vehicles.countDocuments(q); if(total===0){return;} vfound=true; print(\"vehicles in \"+idn+\".vehicles by this seller: \"+total); idb.vehicles.aggregate([{\$match:q},{\$group:{_id:\"\$status\",n:{\$sum:1}}}]).forEach(function(g){print(\"  \"+(g._id||\"(null)\")+\": \"+g.n);}); idb.vehicles.find(q,{title:1,status:1}).limit(8).forEach(function(v){print(\"  [\"+(v.status||\"?\")+\"] \"+(v.title||v._id));}); }); if(!vfound){print(\"  no vehicles found by createdBy = _id or email in any *.vehicles collection\");} }); if(!found){print(\"USER NOT FOUND in any *.users collection (searched emailId/email, case-insensitive)\");} });' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod golivecheck -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            echo '--- seller verificationStatus + vehicle status breakdown ---'
+            kubectl logs golivecheck -n adp 2>&1 | tail -80
+            kubectl delete pod golivecheck -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Interpretation:"
+        echo "  Failing seller verificationStatus != ACTIVE and their vehicles are all DRAFT -> CONFIRMED root cause."
+        echo "     InventoryServiceImpl.handleStatusMapping forces DRAFT for non-ACTIVE sellers; public listing needs LIVE."
+        echo "     Fix path: set that user's verificationStatus to ACTIVE (verify/approve the seller in adp_users.users),"
+        echo "     then the seller re-saves the listing (or an admin flips the existing DRAFT vehicle to LIVE)."
+        echo "  Control seller is ACTIVE with LIVE vehicles -> confirms the pipeline/visibility path is otherwise fine."
+        echo "  Both sellers ACTIVE but failing one still hidden -> not a status issue; re-check ES sync (status LIVE in Mongo but"
+        echo "     missing from the live index) and run a reindex, or check createdBy mismatch in the distinct sample above."
+        echo "  USER NOT FOUND -> the email is not in adp_users.users (different login/email); share the exact account used."
+
+  # ── Fix seller go-live (FIX_SELLER_VERIFICATION=true) — WRITES to MongoDB ──
+  # Sets verificationStatus=ACTIVE for FIX_SELLER_EMAIL so InventoryServiceImpl stops forcing new
+  # listings to DRAFT. Optionally (PROMOTE_SELLER_DRAFTS=true) flips that seller's existing DRAFT
+  # vehicles to LIVE and triggers an Elasticsearch reindex so they show in public listings.
+  # Run DIAGNOSE_SELLER_GOLIVE first to confirm the cause. Self-discovers the users/vehicles DBs.
+  - task: AzureCLI@2
+    displayName: 'Fix seller go-live — set verificationStatus=ACTIVE (+ optional promote DRAFTs) (set FIX_SELLER_VERIFICATION=true)'
+    condition: eq('${{ parameters.FIX_SELLER_VERIFICATION }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX SELLER GO-LIVE — WRITE ##########"
+        echo "Target seller       : ${{ parameters.FIX_SELLER_EMAIL }}"
+        echo "Promote DRAFT->LIVE  : ${{ parameters.PROMOTE_SELLER_DRAFTS }}"
+        echo "=== Importing mongo:7.0 into ACR (private cluster cannot pull Docker Hub) ==="
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod sellerfix -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run sellerfix -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var email=\"${{ parameters.FIX_SELLER_EMAIL }}\"; var promote=(\"${{ parameters.PROMOTE_SELLER_DRAFTS }}\"===\"true\"); if(!email||email===\"none\"){print(\"FIX_SELLER_EMAIL is empty/none — nothing to do\");} else { var dbs=db.adminCommand({listDatabases:1}).databases.map(function(x){return x.name;}); var q1={\$or:[{email_id:email},{emailId:email},{email:email},{username:email}]}; var udb=null,usr=null; dbs.forEach(function(dn){ if(usr){return;} var d=db.getSiblingDB(dn); var cols; try{cols=d.getCollectionNames();}catch(e){return;} if(cols.indexOf(\"users\")<0){return;} var f=d.users.findOne(q1); if(f){udb=dn;usr=f;} }); if(!usr){print(\"USER NOT FOUND for \"+email+\" — aborting, no changes made\");} else { var ud=db.getSiblingDB(udb); var uid=usr._id.toString(); print(\"user: \"+udb+\".users  _id=\"+uid); print(\"verificationStatus BEFORE = \"+usr.verificationStatus); var r=ud.users.updateOne({_id:usr._id},{\$set:{verificationStatus:\"ACTIVE\",verificationDate:new Date()}}); print(\"users update matched=\"+r.matchedCount+\" modified=\"+r.modifiedCount); var after=ud.users.findOne({_id:usr._id},{verificationStatus:1}); print(\"verificationStatus AFTER  = \"+after.verificationStatus); if(promote){ dbs.forEach(function(idn){ var idb=db.getSiblingDB(idn); var ic; try{ic=idb.getCollectionNames();}catch(e){return;} if(ic.indexOf(\"vehicles\")<0){return;} var vq={createdBy:{\$in:[uid,email]},status:\"DRAFT\"}; var cnt=idb.vehicles.countDocuments(vq); if(cnt===0){return;} print(\"promoting \"+cnt+\" DRAFT vehicles to LIVE in \"+idn+\".vehicles\"); var vr=idb.vehicles.updateMany(vq,{\$set:{status:\"LIVE\"}}); print(\"  vehicles modified=\"+vr.modifiedCount); }); } else { print(\"PROMOTE_SELLER_DRAFTS not set — existing DRAFT listings left unchanged (seller can re-save).\"); } } }' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod sellerfix -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            echo '--- fix output ---'
+            kubectl logs sellerfix -n adp 2>&1 | tail -60
+            kubectl delete pod sellerfix -n adp --ignore-not-found >/dev/null 2>&1
+          "
+
+        if [ "${{ parameters.PROMOTE_SELLER_DRAFTS }}" = "true" ]; then
+          echo ""
+          echo "=== Triggering Elasticsearch reindex so promoted listings show in public search ==="
+          az aks command invoke \
+            --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+            --command "
+              POD=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+              if [ -z \"\$POD\" ]; then echo 'WARN: no inventory pod found — run pipeline-prod-inventory reindex manually'; exit 0; fi
+              echo \"Using pod: \$POD\"
+              kubectl exec -n adp \$POD -- wget -qO- --post-data='' --header='Content-Type: application/json' \
+                http://localhost:8084/api/v1/inventory/reindex-all 2>&1 | head -40 || echo '(reindex running — AKS invoke timeout is expected for long operations)'
+            "
+        fi
+
+        echo ""
+        echo "Done. Next:"
+        echo "  verificationStatus AFTER = ACTIVE -> the seller's NEW saves will go LIVE."
+        echo "  If you promoted DRAFTs, allow the reindex to finish, then confirm the listings appear in public search."
+        echo "  If you did NOT promote, the seller can re-save each existing DRAFT listing to push it LIVE."
+
+  # ── Verify seller vehicle image storage (VERIFY_SELLER_VEHICLE_BLOBS=true) — READ ONLY ──
+  # Lists the seller's most recent vehicles (vehicles.createdBy = the seller's user _id) and classifies
+  # each image URL: PROD (azamppruaenstg / prod-blob-adp-bucket) vs OLD-PREPROD (preprodblobadp). Confirms
+  # whether NEW uploads are landing in the production ADPG blob. Uses the mongo-pod pattern (ACR import
+  # of mongo:7.0 + imagePullSecrets; URI passed as the connection arg). Read-only.
+  - task: AzureCLI@2
+    displayName: 'Verify seller vehicle images — PROD vs pre-prod blob (set VERIFY_SELLER_VEHICLE_BLOBS=true)'
+    condition: eq('${{ parameters.VERIFY_SELLER_VEHICLE_BLOBS }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## VERIFY SELLER VEHICLE IMAGE STORAGE — READ ONLY ##########"
+        echo "=== Importing mongo:7.0 into ACR (private cluster cannot pull Docker Hub) ==="
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod blobchk -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run blobchk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var au=db.getSiblingDB(\"adp_users\"); var inv=db.getSiblingDB(\"adp_inventory\"); var email=\"${{ parameters.BLOB_CHECK_EMAIL }}\"; var u=au.users.findOne({email_id:email},{_id:1,name:1}); if(!u){print(\"user not found: \"+email);} else { var uid=String(u._id); print(\"seller=\"+email+\" name=\"+(u.name||\"\")+\" id=\"+uid); var prod=0,old=0,other=0,total=0; inv.vehicles.find({createdBy:uid},{brand:1,model:1,createTime:1,mainImageUrl:1,imageUrls:1}).sort({createTime:-1}).limit(25).forEach(function(v){ total++; var url=v.mainImageUrl||((v.imageUrls&&v.imageUrls[0])||\"\"); var cls=url.indexOf(\"azamppruaenstg\")>=0?\"PROD\":(url.indexOf(\"preprodblobadp\")>=0?\"OLD-PREPROD\":\"OTHER/none\"); if(cls==\"PROD\")prod++; else if(cls==\"OLD-PREPROD\")old++; else other++; var host=url?url.split(\"/\").slice(0,4).join(\"/\"):\"(no image)\"; print(cls+\" | \"+(v.brand||\"\")+\" \"+(v.model||\"\")+\" | \"+(v.createTime||\"\")+\" | \"+host); }); print(\"---- totals: \"+total+\" vehicles | PROD=\"+prod+\" OLD-PREPROD=\"+old+\" OTHER=\"+other+\" ----\"); if(total===0)print(\"(no vehicles with createdBy=\"+uid+\" — confirm the email or that cars were saved)\"); }' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod blobchk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            echo '--- recent vehicles for seller (class | brand model | createTime | host) ---'
+            kubectl logs blobchk -n adp 2>&1 | tail -60
+            kubectl delete pod blobchk -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Interpretation:"
+        echo "  PROD        -> image is in the production ADPG blob (azamppruaenstg / prod-blob-adp-bucket). Correct."
+        echo "  OLD-PREPROD -> still points at preprodblobadp; either new uploads are NOT landing in prod (app azure.storage.sas.url not repointed to prod) or this is old data not yet URL-rewritten."
+        echo "  OTHER/none  -> the vehicle has no image URL."
+        echo "  totals 0    -> no vehicles for that seller id; confirm BLOB_CHECK_EMAIL or that the cars were saved."
+
+  # ── Check user roles (CHECK_USER_ROLES=true) — READ ONLY ──
+  # The app derives roleType by looking up user.role_id in adp_users.roles. If a user's role_id is null
+  # or does not match any role _id, roleType comes back empty -> the account logs in but shows no role
+  # badge and cannot reach its dashboard (role-gated), while Negotiations (not role-gated) still works.
+  # This prints the role map, diagnoses CHECK_ROLE_EMAIL in detail, then lists every user and flags
+  # NO-ROLE-ID and BROKEN (role_id not present in roles). Uses the mongo-pod pattern. Read-only.
+  - task: AzureCLI@2
+    displayName: 'Check user roles — resolve role_id for one/all accounts (set CHECK_USER_ROLES=true)'
+    condition: eq('${{ parameters.CHECK_USER_ROLES }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## CHECK USER ROLES — READ ONLY ##########"
+        echo "=== Importing mongo:7.0 into ACR (private cluster cannot pull Docker Hub) ==="
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod rolechk -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run rolechk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var au=db.getSiblingDB(\"adp_users\"); var roles={}; au.roles.find({},{role_name:1,role_type:1}).forEach(function(r){roles[String(r._id)]={n:r.role_name,t:r.role_type};}); print(\"=== roles present in adp_users.roles ===\"); Object.keys(roles).forEach(function(k){print(\"  \"+k+\" -> \"+roles[k].n+\" / \"+roles[k].t);}); var email=\"${{ parameters.CHECK_ROLE_EMAIL }}\"; if(email && email!=\"none\"){ print(\"################ ACCOUNT: \"+email+\" ################\"); var u=au.users.findOne({email_id:email}); if(!u){print(\"USER NOT FOUND (by email_id)\");} else { var rid=u.role_id?String(u.role_id):\"(null)\"; var rr=roles[rid]; print(\"_id=\"+u._id+\" role_id=\"+rid+\" active=\"+u.active+\" otp_verified=\"+u.otp_verified+\" verificationStatus=\"+u.verificationStatus+\" create_date=\"+u.create_date); print(rr?(\"ROLE OK -> \"+rr.n+\" / \"+rr.t):(\"BROKEN: role_id \"+rid+\" has NO match in roles -> roleType will be EMPTY (no role badge, no dashboard)\")); } } print(\"=== ALL USERS (role resolution) ===\"); var ok=0,nul=0,brk=0,tot=0; au.users.find({},{email_id:1,role_id:1}).forEach(function(x){ tot++; var rid=x.role_id?String(x.role_id):null; if(!rid){nul++; print(\"NO-ROLE-ID | \"+(x.email_id||x._id));} else if(!roles[rid]){brk++; print(\"BROKEN     | \"+(x.email_id||x._id)+\" | role_id=\"+rid);} else {ok++; print(\"OK \"+roles[rid].t+\" | \"+(x.email_id||x._id));} }); print(\"---- totals: \"+tot+\" users | OK=\"+ok+\" NO-ROLE-ID=\"+nul+\" BROKEN=\"+brk+\" ----\");' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod rolechk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs rolechk -n adp 2>&1 | tail -200
+            kubectl delete pod rolechk -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Interpretation:"
+        echo "  OK <type>  -> role_id resolves; roleType is set; login routes to that dashboard normally."
+        echo "  NO-ROLE-ID -> user has no role_id at all -> roleType empty -> logs in with no role / no dashboard."
+        echo "  BROKEN     -> user has a role_id that is NOT in the roles collection -> roleType empty (same symptom)."
+        echo "  If the affected account shows OK here, the empty role is a read-path issue (getUserInfoByToken), not the stored data."
+
+  # ── Diagnose user-info read path (DIAGNOSE_USERINFO=true) — READ ONLY ──
+  # When the stored role_id is correct (CHECK_USER_ROLES shows ROLE OK) but the UI shows no role badge and
+  # no dashboard, the failure is on the read path: Header/UserProfileButton call getUserInfo ->
+  # /api/v1/auth/getUserInfoByToken (adp-authentication) -> /api/v1/users/get-by-id (adp-users). If that
+  # response omits/renames roleType, or the cross-service call errors, roleType is empty. This tails both
+  # services' logs. Reproduce first (log in as the account, open a page), then run. Read-only.
+  - task: AzureCLI@2
+    displayName: 'Diagnose user-info read path — auth + users logs (set DIAGNOSE_USERINFO=true)'
+    condition: eq('${{ parameters.DIAGNOSE_USERINFO }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## AUTHENTICATION — getUserInfoByToken / user info / errors ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-authentication -n adp --tail=400 2>&1 | grep -iE 'getUserInfoByToken|get-by-id|user information|Users Service error|roleType|role_type|500|Exception|ERROR' | tail -50 || echo 'no matching auth lines'" || true
+
+        echo "########## USERS — get-by-id / role resolution / errors ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-users -n adp --tail=400 2>&1 | grep -iE 'get-by-id|Fetching user by userId|User data fetched|roleType|role_type|Role not found|Exception|ERROR|500' | tail -50 || echo 'no matching users lines'" || true
+
+        echo ""
+        echo "Interpretation:"
+        echo "  - 'User data fetched for userId' with NO error -> get-by-id succeeded; the empty role is a"
+        echo "    response-shape mismatch (role served as role_type but frontend reads roleType) -> code fix + redeploy adp-users."
+        echo "  - 'Users Service error' / 500 / Exception in authentication -> the cross-service get-by-id call is failing"
+        echo "    at runtime -> getUserInfoByToken returns no user -> empty role. Fix the underlying users error."
+        echo "  - Nothing logged -> the frontend server call is not carrying the auth cookie to the gateway (session not sent)."
+
+  # ── Diagnose role _id type (DIAGNOSE_ROLE_ID_TYPE=true) — READ ONLY ──
+  # Confirms the runtime cause of an empty roleType despite a correct stored role_id: if roles._id is an
+  # ObjectId but user.role_id is a String, then roleRepository.findById(role_id) (a String query) matches
+  # nothing, so roleName/roleType are never attached to the user-info response. Prints the sample _id types
+  # and, for CHECK_ROLE_EMAIL's role_id, the string-match count (what Java findById does) vs the ObjectId
+  # match count (the truth). Uses the mongo-pod pattern. Read-only.
+  - task: AzureCLI@2
+    displayName: 'Diagnose role _id type — String vs ObjectId (set DIAGNOSE_ROLE_ID_TYPE=true)'
+    condition: eq('${{ parameters.DIAGNOSE_ROLE_ID_TYPE }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## DIAGNOSE ROLE _id TYPE — READ ONLY ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod ridchk -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run ridchk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var sr=d.roles.findOne({}); print(\"roles._id sampleType = \"+(sr._id instanceof ObjectId?\"ObjectId\":typeof sr._id)+\"  value=\"+sr._id); var su=d.users.findOne({}); print(\"users._id sampleType = \"+(su._id instanceof ObjectId?\"ObjectId\":typeof su._id)); var email=\"${{ parameters.CHECK_ROLE_EMAIL }}\"; var u=(email && email!=\"none\")?d.users.findOne({email_id:email},{role_id:1,_id:1}):null; if(!u){print(\"(set CHECK_ROLE_EMAIL to a real account to test its role_id; using first Seller instead)\"); u=d.users.findOne({},{role_id:1,_id:1});} if(u){ var rid=String(u.role_id); print(\"test user _idType=\"+(u._id instanceof ObjectId?\"ObjectId\":typeof u._id)+\"  role_id=\"+rid+\"  role_idType=\"+(u.role_id instanceof ObjectId?\"ObjectId\":typeof u.role_id)); print(\"roles STRING-match count (what Java findById(role_id) does) = \"+d.roles.find({_id:rid}).count()); try{print(\"roles OBJECTID-match count = \"+d.roles.find({_id:ObjectId(rid)}).count());}catch(e){print(\"ObjectId(rid) error: \"+e);} }' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod ridchk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs ridchk -n adp 2>&1 | tail -40
+            kubectl delete pod ridchk -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Interpretation (Spring converts a 24-hex String @Id to ObjectId, so the app's findById actually runs the OBJECTID query):"
+        echo "  roles._id = string AND STRING-match = 1 AND OBJECTID-match = 0"
+        echo "     -> CONFIRMED: the app's findById(role_id) runs {_id:ObjectId(hex)} and matches nothing -> roleType stays empty."
+        echo "     -> Fix by running FIX_ROLE_ID_TYPE=true (converts roles._id String -> ObjectId)."
+        echo "  roles._id = ObjectId AND OBJECTID-match = 1 -> lookup already works; the empty role is a different cause."
+
+  # ── Fix role _id type (FIX_ROLE_ID_TYPE=true) — WRITE ──
+  # Converts roles._id from a 24-hex String to the equivalent ObjectId. Spring Data auto-converts a 24-hex
+  # String @Id to ObjectId at query time, so roleRepository.findById(role_id) runs {_id: ObjectId(hex)};
+  # with String-stored _ids that matches nothing and roleType is never attached. _id is immutable, so each
+  # String-keyed role is re-inserted with _id = ObjectId(hex) and the String copy removed. No user docs change
+  # (role_id stays the same hex string; Spring converts it to ObjectId to match). Idempotent: roles already
+  # ObjectId-keyed are skipped. Run DIAGNOSE_ROLE_ID_TYPE first.
+  - task: AzureCLI@2
+    displayName: 'Fix role _id type — convert roles._id String -> ObjectId (set FIX_ROLE_ID_TYPE=true)'
+    condition: eq('${{ parameters.FIX_ROLE_ID_TYPE }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX ROLE _id TYPE — WRITE (String -> ObjectId) ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod ridfix -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run ridfix -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var toFix=[]; d.roles.find().forEach(function(r){ if(typeof r._id===\"string\") toFix.push(r); }); print(\"roles with string _id to convert: \"+toFix.length); if(toFix.length>0){ d.roles_idfix_bak.drop(); toFix.forEach(function(r){ d.roles_idfix_bak.insertOne(r); }); print(\"backed up \"+toFix.length+\" role(s) to roles_idfix_bak\"); } var changed=0; toFix.forEach(function(r){ var sid=r._id; if(!/^[0-9a-fA-F]{24}\$/.test(sid)){ print(\"  SKIP non-hex: \"+sid); return; } var oid=ObjectId(sid); if(d.roles.countDocuments({_id:oid})>0){ print(\"  SKIP collision: \"+sid); return; } var doc=Object.assign({},r); doc._id=oid; d.roles.deleteOne({_id:sid}); d.roles.insertOne(doc); changed++; print(\"  converted \"+(r.role_name||\"\")+\"  \"+sid); }); print(\"converted \"+changed+\" role(s) String -> ObjectId\"); print(\"AFTER roles:\"); d.roles.find({},{_id:1,role_name:1}).forEach(function(r){print(\"  type=\"+(r._id instanceof ObjectId?\"ObjectId\":typeof r._id)+\"  \"+(r.role_name||\"\"));});' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod ridfix -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs ridfix -n adp 2>&1 | tail -40
+            kubectl delete pod ridfix -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "AFTER should show every role with type=ObjectId. Backup kept in adp_users.roles_idfix_bak."
+        echo "Now reload the site as the affected account: the role badge should show (e.g. Seller) and the dashboard should open. No redeploy needed."
+
+  # ── Diagnose "not marked SOLD" (DIAGNOSE_SOLD=true) — READ ONLY ──
+  # On order placement adp-orders calls inventory PUT /api/v1/inventory/status-update via updateVehicleStatus(...,"SOLD").
+  # INVENTORY_SERVICE_URL and the netpol are already correct, so this inspects the actual call: the live env,
+  # adp-orders logs (did the SOLD call run / error), adp-inventory logs (did it receive status-update / error),
+  # and each recently-ordered vehicle's current status in adp_inventory (should be SOLD). Read-only.
+  - task: AzureCLI@2
+    displayName: 'Diagnose not-marked-SOLD — orders+inventory logs + vehicle status (set DIAGNOSE_SOLD=true)'
+    condition: eq('${{ parameters.DIAGNOSE_SOLD }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## adp-orders + adp-chat — live INVENTORY_SERVICE_URL ##########"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "echo -n 'adp-orders INVENTORY_SERVICE_URL='; kubectl get deployment adp-orders -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo; echo -n 'adp-chat INVENTORY_SERVICE_URL='; kubectl get deployment adp-chat -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo" || true
+
+        echo "########## adp-chat logs — LOCKED / status-update / errors ##########"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-chat -n adp --tail=500 2>&1 | grep -iE 'updateVehicleStatus|status-update|LOCKED|VEHICLE_LOCKED|inventory|timeout|refused|UnknownHost|Connection|Exception|ERROR|40[0-9]|50[0-9]' | tail -50 || echo 'no matching adp-chat lines'" || true
+
+        echo "########## adp-orders logs — SOLD / status-update / errors ##########"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-orders -n adp --tail=500 2>&1 | grep -iE 'updateVehicleStatus|status-update|SOLD|inventory|timeout|refused|UnknownHost|Connection|Exception|ERROR|40[0-9]|50[0-9]' | tail -50 || echo 'no matching adp-orders lines'" || true
+
+        echo "########## adp-inventory logs — status-update received / errors ##########"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs deployment/adp-inventory -n adp --tail=500 2>&1 | grep -iE 'status-update|updateVehicleStatus|SOLD|status|Exception|ERROR|not found|invalid' | tail -50 || echo 'no matching adp-inventory lines'" || true
+
+        echo "########## MongoDB — recent orders and their vehicle status ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — continuing)"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            kubectl delete pod soldchk -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run soldchk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var o=db.getSiblingDB(\"adp_orders\"); var inv=db.getSiblingDB(\"adp_inventory\"); print(\"orders total: \"+o.orders.countDocuments({})); o.orders.find({}).sort({createdAt:-1}).limit(5).forEach(function(ord){ print(\"---- order \"+(ord.orderId||ord._id)+\" buyer=\"+(ord.buyerId||\"\")+\" orderStatus=\"+(ord.orderStatus||\"\")+\" createdAt=\"+(ord.createdAt||\"\")); var vs=ord.vehicles||[]; vs.forEach(function(v){ var vid=v.id||v._id; if(!vid){print(\"   (no vehicle id in order snapshot)\"); return;} var doc=inv.vehicles.findOne({_id:vid}); if(!doc){ try{doc=inv.vehicles.findOne({_id:ObjectId(vid)});}catch(e){} } print(\"   vehicle \"+vid+\" snapshotStatus=\"+(v.status||\"?\")+\" -> current inventory status=\"+(doc?doc.status:\"(NOT FOUND)\")); }); }); print(\"=== inventory vehicles status breakdown ===\"); inv.vehicles.aggregate([{\$group:{_id:\"\$status\",n:{\$sum:1}}}]).forEach(function(g){print(\"  \"+(g._id||\"(null)\")+\": \"+g.n);});' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod soldchk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs soldchk -n adp 2>&1 | tail -50
+            kubectl delete pod soldchk -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Read: if a vehicle shows current status=LIVE despite an order, the SOLD update did not persist."
+        echo "  - adp-orders log shows a timeout/refused/Exception on the inventory call -> connectivity/endpoint issue."
+        echo "  - adp-inventory log shows status-update received but 'not found'/no match -> id/body mismatch on the update."
+        echo "  - neither logs the call -> updateVehicleStatus threw before the request (or order path skipped updateSystemStates)."
+
+  # ── Fix orders->inventory URL (FIX_ORDERS_INVENTORY_URL=true) — WRITE ──
+  # Re-asserts INVENTORY_SERVICE_URL=http://adp-inventory-service:8084 on adp-orders and restarts. Only helps
+  # if the live env drifted from the manifest; otherwise a no-op. Confirm with DIAGNOSE_SOLD first.
+  - task: AzureCLI@2
+    displayName: 'Fix orders->inventory URL — set INVENTORY_SERVICE_URL on adp-orders (set FIX_ORDERS_INVENTORY_URL=true)'
+    condition: eq('${{ parameters.FIX_ORDERS_INVENTORY_URL }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        echo "########## FIX orders->inventory URL ##########"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            kubectl set env deployment/adp-orders -n adp INVENTORY_SERVICE_URL=http://adp-inventory-service:8084
+            kubectl rollout status deployment/adp-orders -n adp --timeout=300s || true
+            kubectl get deployment adp-orders -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo
+          "
+
+  # ── Fix chat->inventory URL (FIX_CHAT_INVENTORY_URL=true) — WRITE ──
+  # Sets INVENTORY_SERVICE_URL on adp-chat so the "LOCKED" reserve call (updateVehicleStatus on price-lock)
+  # resolves. Only needed if adp-chat's live env is missing/wrong. Confirm with DIAGNOSE_SOLD first.
+  - task: AzureCLI@2
+    displayName: 'Fix chat->inventory URL — set INVENTORY_SERVICE_URL on adp-chat (set FIX_CHAT_INVENTORY_URL=true)'
+    condition: eq('${{ parameters.FIX_CHAT_INVENTORY_URL }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        echo "########## FIX chat->inventory URL ##########"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            kubectl set env deployment/adp-chat -n adp INVENTORY_SERVICE_URL=http://adp-inventory-service:8084
+            kubectl rollout status deployment/adp-chat -n adp --timeout=300s || true
+            kubectl get deployment adp-chat -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INVENTORY_SERVICE_URL\")].value}'; echo
+          "
+
+  # ── Mark a vehicle SOLD (MARK_VEHICLE_SOLD=true) — WRITE, one-off ──
+  # For a car ordered before the SOLD path worked: sets adp_inventory.vehicles status=SOLD for MARK_SOLD_VEHICLE_ID.
+  # The inventory change stream then updates Elasticsearch so it drops out of public listings.
+  - task: AzureCLI@2
+    displayName: 'Mark vehicle SOLD — one-off (set MARK_VEHICLE_SOLD=true + MARK_SOLD_VEHICLE_ID)'
+    condition: eq('${{ parameters.MARK_VEHICLE_SOLD }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        if [ -z "${{ parameters.MARK_SOLD_VEHICLE_ID }}" ]; then echo "ABORT: MARK_SOLD_VEHICLE_ID is empty."; exit 0; fi
+        echo "########## MARK VEHICLE SOLD ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — continuing)"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            kubectl delete pod marksold -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run marksold -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var inv=db.getSiblingDB(\"adp_inventory\"); var vid=\"${{ parameters.MARK_SOLD_VEHICLE_ID }}\"; var q=null; if(inv.vehicles.countDocuments({_id:vid})>0){q={_id:vid};} else { try{ if(inv.vehicles.countDocuments({_id:ObjectId(vid)})>0){q={_id:ObjectId(vid)};} }catch(e){} } if(!q){print(\"vehicle not found: \"+vid);} else { print(\"BEFORE status=\"+inv.vehicles.findOne(q).status); var r=inv.vehicles.updateOne(q,{\$set:{status:\"SOLD\"}}); print(\"matched=\"+r.matchedCount+\" modified=\"+r.modifiedCount); print(\"AFTER status=\"+inv.vehicles.findOne(q).status); }' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod marksold -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs marksold -n adp 2>&1 | tail -20
+            kubectl delete pod marksold -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "The inventory change stream will sync the SOLD status to Elasticsearch (drops from public listings)."
+
+  # ── Diagnose Mongo->ES sync (DIAGNOSE_ES_SYNC=true) — READ ONLY ──
+  # Proves the sync gap: change-stream-status, ES counts by status vs Mongo counts by status, and adp-inventory
+  # sync/change-stream logs. If ES counts SOLD as still LIVE while Mongo shows SOLD, the status-update path
+  # (updateSingleVehicleStatus) is not syncing ES (it lacks the syncToElasticsearchSilently call the other
+  # mutations have), and/or the change-stream is down.
+  - task: AzureCLI@2
+    displayName: 'Diagnose Mongo->ES sync — status drift + change-stream state (set DIAGNOSE_ES_SYNC=true)'
+    condition: eq('${{ parameters.DIAGNOSE_ES_SYNC }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## change-stream-status + ES counts by status ##########"
+        az acr import --name adpgamppruaencr --source docker.io/curlimages/curl:8.11.1 --image curl:8.11.1 --force \
+          || echo "(acr import returned non-zero — continuing)"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            ESURL=\$(kubectl get configmap adp-backend-config -n adp -o jsonpath='{.data.ELASTICSEARCH_URL}')
+            ESKEY=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.ELASTICSEARCH_API_KEY}' | base64 -d)
+            kubectl delete pod syncchk -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run syncchk -n adp --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --env ESU=\"\$ESURL\" --env ESK=\"\$ESKEY\" \
+              --command -- sh -c 'echo \"== change-stream-status ==\"; curl -s -m 20 http://adp-inventory-service:8084/api/v1/inventory/change-stream-status; echo; echo \"== ES adp_inventory counts by status ==\"; for s in LIVE LOCKED SOLD DRAFT; do printf \"\$s: \"; curl -s -H \"Authorization: ApiKey \$ESK\" \"\$ESU/adp_inventory/_count?q=status:\$s\"; echo; done; printf \"ALL: \"; curl -s -H \"Authorization: ApiKey \$ESK\" \"\$ESU/adp_inventory/_count\"; echo'
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod syncchk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs syncchk -n adp 2>&1 | tail -30
+            kubectl delete pod syncchk -n adp --ignore-not-found >/dev/null 2>&1
+          "
+
+        echo "########## Mongo vehicles counts by status ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force >/dev/null 2>&1 || true
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            kubectl delete pod syncmg -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run syncmg -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var inv=db.getSiblingDB(\"adp_inventory\"); print(\"Mongo vehicles by status:\"); inv.vehicles.aggregate([{\$group:{_id:\"\$status\",n:{\$sum:1}}}]).forEach(function(g){print(\"  \"+(g._id||\"(null)\")+\": \"+g.n);});' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod syncmg -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs syncmg -n adp 2>&1 | tail -15
+            kubectl delete pod syncmg -n adp --ignore-not-found >/dev/null 2>&1
+          "
+
+        echo "########## adp-inventory logs — ES sync + change-stream lifecycle ##########"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "kubectl logs -l app=adp-inventory -n adp --tail=500 --prefix 2>&1 | grep -iE 'synced to Elasticsearch|Change Stream|change stream|replica set|Error in change|Failed to start|Elasticsearch sync|reindex' | tail -50 || echo 'no matching adp-inventory lines'" || true
+
+        echo ""
+        echo "Read: compare 'ES adp_inventory counts by status' vs 'Mongo vehicles by status'."
+        echo "  If Mongo shows SOLD:n but ES shows those still under LIVE (SOLD lower in ES) -> status-update did not sync to ES."
+        echo "  change-stream-status running:false (or a 'replica set'/'Error in change stream' log) -> the backup stream is down too."
+
+  # ── Reindex inventory to Elasticsearch (REINDEX_INVENTORY_ES=true) — WRITE ──
+  # The inventory->ES change stream is not reliably propagating (a SOLD car stayed visible; a wipe left ES
+  # full). This POSTs the app's own reindex-all so ES is rebuilt from current Mongo state: LIVE/LOCKED cars
+  # show, SOLD/DRAFT are excluded by the listing filter. Runs a curl pod (curl imported into ACR) against the
+  # internal inventory service (security auto-config is excluded, so no auth needed).
+  - task: AzureCLI@2
+    displayName: 'Reindex inventory to Elasticsearch — reindex-all (set REINDEX_INVENTORY_ES=true)'
+    condition: eq('${{ parameters.REINDEX_INVENTORY_ES }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        echo "########## REINDEX INVENTORY -> ELASTICSEARCH ##########"
+        az acr import --name adpgamppruaencr --source docker.io/curlimages/curl:8.11.1 --image curl:8.11.1 --force \
+          || echo "(acr import returned non-zero — continuing)"
+        az aks command invoke --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            kubectl delete pod reidx -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run reidx -n adp --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- sh -c 'curl -s -m 120 -XPOST http://adp-inventory-service:8084/api/v1/inventory/reindex-all; echo'
+            for i in \$(seq 1 60); do ph=\$(kubectl get pod reidx -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs reidx -n adp 2>&1 | tail -20
+            kubectl delete pod reidx -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Reindex runs in the background on adp-inventory. Give it a moment, then reload the storefront — the SOLD car should no longer appear, LIVE cars should."
+
+  # ── Clear Elasticsearch listings (CLEAR_ES_LISTINGS=true) — WRITE ──
+  # Public listings/search read from ES (indices adp_inventory, adp_inventory_items). After a Mongo wipe the
+  # change stream should remove them, but bulk deletes may not fully propagate; this explicitly runs
+  # _delete_by_query match_all on both indices. Reads ES URL from configmap adp-backend-config (ELASTICSEARCH_URL)
+  # and the API key from adp-secrets (ELASTICSEARCH_API_KEY), then runs a curl pod (curl imported into ACR).
+  # Prints before/after _count for each index. Safe no-op if already empty.
+  - task: AzureCLI@2
+    displayName: 'Clear Elasticsearch listings — delete_by_query both indices (set CLEAR_ES_LISTINGS=true)'
+    condition: eq('${{ parameters.CLEAR_ES_LISTINGS }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## CLEAR ELASTICSEARCH LISTINGS — WRITE ##########"
+        az acr import --name adpgamppruaencr --source docker.io/curlimages/curl:8.11.1 --image curl:8.11.1 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            ESURL=\$(kubectl get configmap adp-backend-config -n adp -o jsonpath='{.data.ELASTICSEARCH_URL}')
+            ESKEY=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.ELASTICSEARCH_API_KEY}' | base64 -d)
+            if [ -z \"\$ESURL\" ] || [ -z \"\$ESKEY\" ]; then echo 'ERROR: ELASTICSEARCH_URL (configmap) or ELASTICSEARCH_API_KEY (secret) not found'; exit 1; fi
+            echo \"ES endpoint: \$ESURL\"
+            kubectl delete pod esclear -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run esclear -n adp --image=adpgamppruaencr.azurecr.io/curl:8.11.1 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --env ESU=\"\$ESURL\" --env ESK=\"\$ESKEY\" \
+              --command -- sh -c 'for idx in adp_inventory adp_inventory_items; do echo \"== \$idx ==\"; printf \"before: \"; curl -s -H \"Authorization: ApiKey \$ESK\" \"\$ESU/\$idx/_count\"; echo; curl -s -XPOST -H \"Authorization: ApiKey \$ESK\" \"\$ESU/\$idx/_delete_by_query?q=*:*&conflicts=proceed&refresh=true\"; echo; printf \"after: \"; curl -s -H \"Authorization: ApiKey \$ESK\" \"\$ESU/\$idx/_count\"; echo; done'
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod esclear -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs esclear -n adp 2>&1 | tail -40
+            kubectl delete pod esclear -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Each index should read \"count\":0 in the 'after:' line. Reload the storefront/search to confirm it is empty."
+
+  # ── Wipe all business data (WIPE_BUSINESS_DATA=true, WIPE_CONFIRM=ERASE-ALL) — WRITE, DESTRUCTIVE, NO BACKUP ──
+  # Empties the catalog + deal/activity collections so the platform starts clean, KEEPING all users, roles,
+  # profiles, bank details, statemachine config, masters, and inventory.ports. Straight deleteMany({}) — no
+  # in-DB backup is taken (an external backup already exists). The adp-inventory change stream propagates the
+  # vehicles/inventory deletes to Elasticsearch, so public listings/search go empty too (adp-inventory must be
+  # running). Guarded by WIPE_CONFIRM=ERASE-ALL.
+  - task: AzureCLI@2
+    displayName: 'WIPE business data — cars/negotiations/orders (set WIPE_BUSINESS_DATA=true + WIPE_CONFIRM=ERASE-ALL)'
+    condition: eq('${{ parameters.WIPE_BUSINESS_DATA }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        if [ "${{ parameters.WIPE_CONFIRM }}" != "ERASE-ALL" ]; then
+          echo "ABORT: WIPE_CONFIRM is not 'ERASE-ALL' (got '${{ parameters.WIPE_CONFIRM }}'). No changes made."
+          exit 0
+        fi
+
+        echo "########## WIPE BUSINESS DATA — WRITE (DESTRUCTIVE) ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod wipebiz -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run wipebiz -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var plan={adp_inventory:[\"vehicles\",\"inventory\",\"cart\",\"favourites\",\"insurance\",\"quote_builder\",\"tracking\"],adp_chat:[\"negotiations\",\"negotiation\",\"negotiation_history\",\"chat_messages\"],adp_orders:[\"orders\"]}; Object.keys(plan).forEach(function(dbn){ var d=db.getSiblingDB(dbn); plan[dbn].forEach(function(c){ var n=d.getCollection(c).countDocuments({}); if(n>0){ var del=d.getCollection(c).deleteMany({}); print(dbn+\".\"+c+\": deleted \"+del.deletedCount+\" of \"+n); } else { print(dbn+\".\"+c+\": empty (0) — skipped\"); } }); }); print(\"=== remaining counts ===\"); Object.keys(plan).forEach(function(dbn){ var d=db.getSiblingDB(dbn); plan[dbn].forEach(function(c){ print(\"  \"+dbn+\".\"+c+\" = \"+d.getCollection(c).countDocuments({})); }); }); print(\"KEPT: adp_users (users/roles/profiles/bank), adp_statemachine (config), adp_masters, adp_inventory.ports\");' >/dev/null 2>&1
+            for i in \$(seq 1 80); do ph=\$(kubectl get pod wipebiz -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs wipebiz -n adp 2>&1 | tail -60
+            kubectl delete pod wipebiz -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "No in-DB backup was taken (external backup already exists)."
+        echo "Verify the public listings page + search are empty (ES clears via the inventory change stream; if any stale cars remain, POST /api/v1/inventory/reindex-all or tell me and I will add an ES-clear step)."
+
+  # ── Bulk verify accounts (BULK_VERIFY_ACTIVE=true) — WRITE ──
+  # Sets verificationStatus=ACTIVE (and verificationDate) for every account whose email_id is NOT in
+  # BULK_VERIFY_EXCLUDE. Read-only preview of the count first, then the update, then a per-account listing.
+  - task: AzureCLI@2
+    displayName: 'Bulk verify — set verificationStatus=ACTIVE except excluded (set BULK_VERIFY_ACTIVE=true)'
+    condition: eq('${{ parameters.BULK_VERIFY_ACTIVE }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## BULK VERIFY — WRITE ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod bulkvfy -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run bulkvfy -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var excl=\"${{ parameters.BULK_VERIFY_EXCLUDE }}\".split(\",\").map(function(s){return s.trim();}).filter(function(s){return s;}); print(\"excluding: \"+excl.join(\", \")); var willChange=d.users.countDocuments({email_id:{\$nin:excl}, verificationStatus:{\$ne:\"ACTIVE\"}}); print(\"accounts to set ACTIVE (currently not ACTIVE, not excluded): \"+willChange); var r=d.users.updateMany({email_id:{\$nin:excl}}, {\$set:{verificationStatus:\"ACTIVE\", verificationDate:new Date()}}); print(\"matched=\"+r.matchedCount+\" modified=\"+r.modifiedCount); print(\"=== status after ===\"); d.users.find({},{email_id:1,verificationStatus:1}).forEach(function(u){print(\"  \"+(u.email_id||u._id)+\" | \"+u.verificationStatus);});' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod bulkvfy -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs bulkvfy -n adp 2>&1 | tail -60
+            kubectl delete pod bulkvfy -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Excluded accounts keep their prior status. Sellers just activated can list going forward; existing DRAFT"
+        echo "listings still need a re-save (or use FIX_SELLER_VERIFICATION + PROMOTE_SELLER_DRAFTS per seller)."
+
+  # ── Replace account email/phone (REPLACE_USER_EMAIL=true) — WRITE ──
+  # Changes REPLACE_OLD_EMAIL's email_id (and username if it equals the email) to REPLACE_NEW_EMAIL and sets
+  # phone_number to REPLACE_NEW_PHONE. Aborts if the old account is missing or the new email already exists.
+  - task: AzureCLI@2
+    displayName: 'Replace account email/phone (set REPLACE_USER_EMAIL=true)'
+    condition: eq('${{ parameters.REPLACE_USER_EMAIL }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## REPLACE ACCOUNT EMAIL/PHONE — WRITE ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod replemail -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run replemail -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var oldE=\"${{ parameters.REPLACE_OLD_EMAIL }}\"; var newE=\"${{ parameters.REPLACE_NEW_EMAIL }}\"; var newP=\"${{ parameters.REPLACE_NEW_PHONE }}\"; var u=d.users.findOne({email_id:oldE}); if(!u){ print(\"OLD not found: \"+oldE+\" — no change\"); } else if(d.users.countDocuments({email_id:newE})>0){ print(\"NEW email already exists: \"+newE+\" — aborting, no change\"); } else { print(\"BEFORE:\"); printjson(d.users.findOne({_id:u._id},{email_id:1,username:1,phone_number:1})); var set={email_id:newE, phone_number:newP, update_date:new Date()}; if(u.username===oldE){ set.username=newE; } var r=d.users.updateOne({_id:u._id},{\$set:set}); print(\"matched=\"+r.matchedCount+\" modified=\"+r.modifiedCount); print(\"AFTER:\"); printjson(d.users.findOne({_id:u._id},{email_id:1,username:1,phone_number:1})); }' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod replemail -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs replemail -n adp 2>&1 | tail -30
+            kubectl delete pod replemail -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "The account now logs in with the new email; password is unchanged. If they forgot it, use Forgot Password with the NEW email + NEW phone."
+
+  # ── Add admin account (ADD_ADMIN=true) — WRITE ──
+  # Creates an Admin-role user for ADMIN_EMAIL / ADMIN_PHONE with verificationStatus=ACTIVE. _id is left to
+  # Mongo (ObjectId); role_id is set to the Admin role's hex (Spring converts it to ObjectId to match). The
+  # password is a random argon2id hash (unknown/unusable), so the admin sets their own via Forgot Password
+  # (email + phone). Skips if the email already exists. Admin roleType routes to /admin/dashboard.
+  - task: AzureCLI@2
+    displayName: 'Add admin account — Admin role, ACTIVE (set ADD_ADMIN=true)'
+    condition: eq('${{ parameters.ADD_ADMIN }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## ADD ADMIN ACCOUNT — WRITE ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod addadmin -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run addadmin -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var email=\"${{ parameters.ADMIN_EMAIL }}\"; var phone=\"${{ parameters.ADMIN_PHONE }}\"; if(d.users.countDocuments({email_id:email})>0){ print(\"admin already exists: \"+email+\" — no change\"); } else { var ar=d.roles.findOne({role_type:\"Admin\"}); if(!ar){ print(\"ERROR: Admin role not found\"); } else { var rid=String(ar._id); var doc={ name:\"Admin\", username:email, email_id:email, phone_number:phone, password:\"\$argon2id\$v=19\$m=65536,t=3,p=1\$eVvjtXvD9kSjxZFerWhEvQ\$jBPOk2wPZRO10PFmXOkSE91XSU2cdAh57jpaqFOSngk\", role_id:rid, active:true, otp:{otp_attempt:0}, otp_verified:false, password_temporary:true, is_first_time_login:true, verificationStatus:\"ACTIVE\", role_meta_data:{}, number_of_login:0, create_date:new Date(), update_date:new Date(), _class:\"com.adp.users.entity.User\" }; var r=d.users.insertOne(doc); print(\"created admin _id=\"+r.insertedId+\" role_id=\"+rid+\" (Admin)\"); printjson(d.users.findOne({email_id:email},{email_id:1,phone_number:1,role_id:1,verificationStatus:1,active:1})); } }' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod addadmin -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs addadmin -n adp 2>&1 | tail -30
+            kubectl delete pod addadmin -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Next: the admin opens the login page -> Forgot Password -> enters ${{ parameters.ADMIN_EMAIL }} + phone ${{ parameters.ADMIN_PHONE }} to set a password (OTP is emailed)."
+        echo "Then log in -> routed to /admin/dashboard. (Negotiation emails already CC admin@globalautotrade.com via code; no config needed.)"
+
+  # ── Check account verification (CHECK_VERIFICATION=true) — READ ONLY ──
+  # Lists every account with its role and verificationStatus, flagging any that are NOT ACTIVE. This is the
+  # gate behind the earlier issues: a seller's listing only goes LIVE when verificationStatus=ACTIVE, and a
+  # buyer's negotiate/quote button stays greyed until the buyer is verified. Prints a totals summary by
+  # status so you can see at a glance who still needs approval. Uses the mongo-pod pattern. Read-only.
+  - task: AzureCLI@2
+    displayName: 'Check account verification — role + verificationStatus for all accounts (set CHECK_VERIFICATION=true)'
+    condition: eq('${{ parameters.CHECK_VERIFICATION }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## CHECK ACCOUNT VERIFICATION — READ ONLY ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod vfychk -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run vfychk -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var roles={}; d.roles.find({},{role_type:1}).forEach(function(r){roles[String(r._id)]=r.role_type;}); var tot=0, byStatus={}; print(\"=== flag | email | role | verificationStatus ===\"); d.users.find({},{email_id:1,role_id:1,verificationStatus:1}).forEach(function(u){ tot++; var rt=roles[String(u.role_id)]||\"(no role)\"; var vs=u.verificationStatus||\"(none)\"; byStatus[vs]=(byStatus[vs]||0)+1; var flag=(String(vs).toUpperCase()===\"ACTIVE\")?\"OK        \":\"NOT-ACTIVE\"; print(\"  \"+flag+\" | \"+(u.email_id||u._id)+\" | \"+rt+\" | \"+vs); }); print(\"---- totals: \"+tot+\" users ----\"); Object.keys(byStatus).forEach(function(k){print(\"  \"+k+\": \"+byStatus[k]);});' >/dev/null 2>&1
+            for i in \$(seq 1 40); do ph=\$(kubectl get pod vfychk -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs vfychk -n adp 2>&1 | tail -80
+            kubectl delete pod vfychk -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "Interpretation:"
+        echo "  ACTIVE               -> fully verified: seller listings can go LIVE; buyer negotiate/quote enabled."
+        echo "  PENDING_VERIFICATION -> submitted docs, awaiting admin approval -> still gated."
+        echo "  INACTIVE / (none)    -> not verified (no docs / rejected) -> gated."
+        echo "  To approve a specific seller use FIX_SELLER_VERIFICATION=true with FIX_SELLER_EMAIL."
+
+  # ── Fix user _id type (FIX_USER_ID_TYPE=true) — WRITE ──
+  # Converts imported users._id from a 24-hex String to the equivalent ObjectId, same reason as roles: Spring
+  # userRepository.findById(userId) runs {_id: ObjectId(hex)}, which misses String-stored _ids -> old accounts
+  # log in but come back "User not found" / no data / no role. App-created (new) users already have ObjectId
+  # _ids and are skipped. Cross-collection references (vehicles.createdBy, negotiations, orders, bank_details)
+  # store the user id as a plain hex STRING and are matched via user.getId() (still the same hex), so they are
+  # unaffected. Each String-keyed user is backed up to users_idfix_bak, then re-inserted with _id = ObjectId(hex)
+  # and the String copy removed. Idempotent. Run DIAGNOSE_ROLE_ID_TYPE / FIX_ROLE_ID_TYPE first.
+  - task: AzureCLI@2
+    displayName: 'Fix user _id type — convert users._id String -> ObjectId (set FIX_USER_ID_TYPE=true)'
+    condition: eq('${{ parameters.FIX_USER_ID_TYPE }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+
+        echo "########## FIX USER _id TYPE — WRITE (String -> ObjectId) ##########"
+        az acr import --name adpgamppruaencr --source docker.io/library/mongo:7.0 --image mongo:7.0 --force \
+          || echo "(acr import returned non-zero — image may already be present; continuing)"
+
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            MURI=\$(kubectl get secret adp-secrets -n adp -o jsonpath='{.data.MONGODB_URI}' | base64 -d)
+            if [ -z \"\$MURI\" ]; then echo 'ERROR: MONGODB_URI secret key not found in adp-secrets'; exit 1; fi
+            kubectl delete pod uidfix -n adp --ignore-not-found >/dev/null 2>&1
+            kubectl run uidfix -n adp --image=adpgamppruaencr.azurecr.io/mongo:7.0 --restart=Never \
+              --overrides='{\"spec\":{\"imagePullSecrets\":[{\"name\":\"acr-secret\"}]}}' \
+              --command -- \
+              mongosh \"\$MURI\" --quiet --eval 'var d=db.getSiblingDB(\"adp_users\"); var toFix=[]; d.users.find().forEach(function(u){ if(typeof u._id===\"string\") toFix.push(u); }); print(\"users with string _id to convert: \"+toFix.length); if(toFix.length>0){ d.users_idfix_bak.drop(); toFix.forEach(function(u){ d.users_idfix_bak.insertOne(u); }); print(\"backed up \"+toFix.length+\" user(s) to users_idfix_bak\"); } var changed=0,skip=0; toFix.forEach(function(u){ var sid=u._id; if(!/^[0-9a-fA-F]{24}\$/.test(sid)){ print(\"  SKIP non-hex: \"+sid); skip++; return; } var oid=ObjectId(sid); if(d.users.countDocuments({_id:oid})>0){ print(\"  SKIP collision: \"+sid); skip++; return; } var doc=Object.assign({},u); doc._id=oid; d.users.deleteOne({_id:sid}); d.users.insertOne(doc); changed++; print(\"  converted \"+(u.email_id||u.username||\"\")+\"  \"+sid); }); print(\"converted \"+changed+\" user(s) String -> ObjectId; skipped \"+skip); var rem=0; d.users.find().forEach(function(u){ if(typeof u._id===\"string\") rem++; }); print(\"users with string _id remaining = \"+rem);' >/dev/null 2>&1
+            for i in \$(seq 1 60); do ph=\$(kubectl get pod uidfix -n adp -o jsonpath='{.status.phase}' 2>/dev/null); if [ \"\$ph\" = \"Succeeded\" ] || [ \"\$ph\" = \"Failed\" ]; then break; fi; sleep 3; done
+            kubectl logs uidfix -n adp 2>&1 | tail -80
+            kubectl delete pod uidfix -n adp --ignore-not-found >/dev/null 2>&1
+          "
+        echo ""
+        echo "AFTER 'remaining = 0' means every user is ObjectId-keyed. Backup kept in adp_users.users_idfix_bak."
+        echo "Old accounts should now load fully (log in again to get a fresh token). Combine with FIX_ROLE_ID_TYPE so their role also resolves."
+
+  # ── Fix upload target: point adp-users uploads at the PROD blob (FIX_UPLOAD_SAS=true) ──
+  # Uploads go through adp-users UploadUtils, which reads azure.storage.sas.url. It is hardcoded to the
+  # PRE-PROD SAS in application.properties and not overridden in prod, so new uploads land in preprod.
+  # This reads the SAS from the adp-secrets-prod variable group (variable AZURE_STORAGE_SAS_URL), sets it
+  # on the live adp-users deployment, and restarts. Sourcing from the (secret) variable means the value
+  # is masked in logs and never pasted at run time. The variable MUST be a container-scoped SAS
+  # (https://<account>.blob.core.windows.net/<container>?<sas>) for the chosen production account.
+  - task: AzureCLI@2
+    displayName: 'Fix upload target — set AZURE_STORAGE_SAS_URL on adp-users from adp-secrets-prod (set FIX_UPLOAD_SAS=true)'
+    condition: eq('${{ parameters.FIX_UPLOAD_SAS }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        # Prefer the BLOB_SAS_URL parameter (paste at run time); otherwise use the group variable
+        # AZURE_BLOB_SAS_URL. The group macro has not been resolving for this pipeline, so the
+        # parameter is the reliable path. The value is a scoped, expiring, non-secret SAS.
+        SAS='${{ parameters.BLOB_SAS_URL }}'
+        if [ -z "$SAS" ]; then SAS='$(AZURE_BLOB_SAS_URL)'; fi
+        if [ -z "$SAS" ] || [ "$SAS" = '$(AZURE_BLOB_SAS_URL)' ]; then
+          echo "ERROR: no SAS available. Either paste it into the BLOB_SAS_URL parameter, or set AZURE_BLOB_SAS_URL in adp-secrets-prod."
+          echo "It must be a container-scoped SAS: https://<account>.blob.core.windows.net/<container>?<sas>"
+          exit 1
+        fi
+        case "$SAS" in
+          https://*.blob.core.windows.net/*\?*) : ;;
+          *) echo "ERROR: AZURE_STORAGE_SAS_URL must be a CONTAINER-scoped blob SAS URL (https://<account>.blob.core.windows.net/<container>?<sas>). Account-level SAS (no container) will not work with UploadUtils."; exit 1 ;;
+        esac
+
+        echo "########## FIX UPLOAD TARGET -> PROD BLOB (adp-users) ##########"
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) \
+          --command "
+            kubectl set env deployment/adp-users -n adp AZURE_STORAGE_SAS_URL=\"$SAS\"
+            kubectl rollout status deployment/adp-users -n adp --timeout=300s || true
+            echo '--- effective upload target on new pod (host only, SAS hidden) ---'
+            kubectl get deployment adp-users -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"AZURE_STORAGE_SAS_URL\")].value}' | sed 's/?.*/?<sas-hidden>/'; echo
+          "
+        echo ""
+        echo "Now add a new vehicle as the seller, then re-run VERIFY_SELLER_VEHICLE_BLOBS=true — the newest should show PROD."
+        echo "For permanence: keep the users.yaml AZURE_STORAGE_SAS_URL (from adp-secrets) so a redeploy retains it,"
+        echo "and ensure inject-secrets syncs the blob SAS from the variable group into the k8s adp-secrets."
+
+  # ── Show blob storage variables (SHOW_BLOB_VARS=true) — READ ONLY, no input ──
+  # Prints, from the linked adp-secrets-prod variable group, the host + container of each blob variable
+  # with the SAS token stripped, and flags which is container-scoped (usable as azure.storage.sas.url).
+  # Nothing to type; the values come from the variable group and secret tokens are never printed.
+  - bash: |
+      show() {
+        name="$1"; val="$2"; unexpanded="$3"
+        if [ -z "$val" ] || [ "$val" = "$unexpanded" ]; then echo "$name = (not set in adp-secrets-prod)"; return; fi
+        base="${val%%\?*}"; base="${base%%;*}"           # strip SAS query and any ;connection-string tail
+        path="${base#https://*.blob.core.windows.net}"    # whatever follows the account host
+        if [ -n "$path" ] && [ "$path" != "/" ]; then
+          echo "$name = $base   [container/path-scoped -> USABLE for uploads]"
+        else
+          echo "$name = $base   [account-level, no container -> NOT usable for azure.storage.sas.url]"
+        fi
+      }
+      echo "########## BLOB VARIABLES IN adp-secrets-prod (SAS token hidden) ##########"
+      show AZURE_BLOB_SAS_URL   "$V_AZURE_BLOB_SAS_URL"   '$(AZURE_BLOB_SAS_URL)'
+      show BLOB_SERVICE_SASURL  "$V_BLOB_SERVICE_SASURL"  '$(BLOB_SERVICE_SASURL)'
+      show BLOB_ENDPOINT        "$V_BLOB_ENDPOINT"        '$(BLOB_ENDPOINT)'
+      echo ""
+      echo "Interpretation:"
+      echo "  Use the variable marked [USABLE] as the upload SAS. FIX_UPLOAD_SAS reads AZURE_BLOB_SAS_URL."
+      echo "  If only account-level ones are set, generate a container-scoped SAS and store it as AZURE_BLOB_SAS_URL."
+      echo "  Confirm the account matches the blob-migration destination so old + new images live together."
+    displayName: 'Show blob storage variables (READ ONLY) (set SHOW_BLOB_VARS=true)'
+    condition: eq('${{ parameters.SHOW_BLOB_VARS }}', 'true')
+    env:
+      V_AZURE_BLOB_SAS_URL: $(AZURE_BLOB_SAS_URL)
+      V_BLOB_SERVICE_SASURL: $(BLOB_SERVICE_SASURL)
+      V_BLOB_ENDPOINT: $(BLOB_ENDPOINT)
+
+  # ── Show blob migration runbook (SHOW_BLOB_MIGRATION_PLAN=true) — READ ONLY, no input ──
+  # Prints the two-part image migration (AzCopy files pre-prod -> prod, then rewrite the URL prefix in
+  # MongoDB) targeting the confirmed prod account azamppruaenstg, and lists the prod containers
+  # so the prod-blob-adp-bucket placeholder can be filled. This is the runbook as pipeline output; the
+  # branded vendor brief (docx/pdf) is maintained separately.
+  - task: AzureCLI@2
+    displayName: 'Show blob migration runbook (READ ONLY) (set SHOW_BLOB_MIGRATION_PLAN=true)'
+    condition: eq('${{ parameters.SHOW_BLOB_MIGRATION_PLAN }}', 'true')
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "########## BLOB IMAGE MIGRATION RUNBOOK ##########"
+        echo ""
+        echo "SOURCE (pre-prod): https://preprodblobadp.blob.core.windows.net/preprodblobadp-bucket/User-Documents/..."
+        echo "DEST   (prod):     https://azamppruaenstg.blob.core.windows.net/prod-blob-adp-bucket/"
+        echo ""
+        echo "=== Prod containers on azamppruaenstg (pick the image container -> prod-blob-adp-bucket) ==="
+        az account set --subscription 0a249c66-024e-4317-987f-edb5c27bd6dc 2>/dev/null || true
+        az storage container list --account-name azamppruaenstg --auth-mode login -o table 2>&1 | head -20 \
+          || echo "(could not list — needs Storage Blob Data Reader on azamppruaenstg, or run from a machine with access)"
+        echo ""
+        echo "=== STEP 1: copy files (AzCopy, server-to-server; preserves paths) ==="
+        echo 'azcopy copy \'
+        echo '  "https://preprodblobadp.blob.core.windows.net/preprodblobadp-bucket/*?<SOURCE_READ_SAS>" \'
+        echo '  "https://azamppruaenstg.blob.core.windows.net/prod-blob-adp-bucket?<DEST_WRITE_SAS>" \'
+        echo '  --recursive'
+        echo ""
+        echo "=== STEP 2: rewrite the URL prefix in MongoDB (db adp_inventory; idempotent, reversible) ==="
+        echo 'OLD = https://preprodblobadp.blob.core.windows.net/preprodblobadp-bucket/'
+        echo 'NEW = https://azamppruaenstg.blob.core.windows.net/prod-blob-adp-bucket/'
+        echo 'db.getSiblingDB("adp_inventory").vehicles.updateMany('
+        echo '  { $or: [ {mainImageUrl:/preprodblobadp-bucket/}, {imageUrls:/preprodblobadp-bucket/}, {"inventoryDetails.inspectionReportUrl":/preprodblobadp-bucket/} ] },'
+        echo '  [ { $set: {'
+        echo '      mainImageUrl: { $replaceAll: { input:"$mainImageUrl", find: OLD, replacement: NEW } },'
+        echo '      imageUrls: { $map: { input:"$imageUrls", as:"u", in:{ $replaceAll:{ input:"$$u", find: OLD, replacement: NEW } } } },'
+        echo '      "inventoryDetails.inspectionReportUrl": { $replaceAll: { input:"$inventoryDetails.inspectionReportUrl", find: OLD, replacement: NEW } }'
+        echo '  } } ]'
+        echo ')'
+        echo '(repeat for adp_users document-URL fields: passportUrl, companyLicenseUrl, exportLicenseUrl)'
+        echo ""
+        echo "=== STEP 3: verify ==="
+        echo "  Reload a few migrated URLs (HTTP 200 from the prod account) and run VERIFY_SELLER_VEHICLE_BLOBS=true."
+        echo ""
+        echo "NOTE: new uploads only land in prod once FIX_UPLOAD_SAS has repointed azure.storage.sas.url"
+        echo "      (AZURE_BLOB_SAS_URL, a container-scoped SAS on prod-blob-adp-bucket). Do that too, or new images regress to pre-prod."

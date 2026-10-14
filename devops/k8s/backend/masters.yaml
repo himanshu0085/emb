@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adp-masters
+  namespace: adp
+  labels:
+    app: adp-masters
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adp-masters
+  template:
+    metadata:
+      labels:
+        app: adp-masters
+    spec:
+      containers:
+        - name: adp-masters
+          image: adpgamppruaencr.azurecr.io/adp-masters:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8085
+          env:
+            - name: SPRING_AUTOCONFIGURE_EXCLUDE
+              value: "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration"
+            - name: JAVA_OPTS
+              value: "-Xms128m -Xmx256m"
+            - name: SPRING_MAIN_LAZY_INITIALIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_MAIN_LAZY_INITIALIZATION
+            - name: SPRING_PROFILES_ACTIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_PROFILES_ACTIVE
+            - name: EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: EUREKA_URL
+            - name: SPRING_DATA_MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: MONGODB_URI
+            - name: SPRING_DATA_MONGODB_DATABASE
+              value: "adp_masters"
+            - name: SPRING_DATA_REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_HOST
+            - name: SPRING_DATA_REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_PORT
+            - name: SPRING_DATA_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: REDIS_PASSWORD
+            - name: SPRING_DATA_REDIS_SSL_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_SSL
+            # Disable Redis cache — prevents stale dropdown data after data changes
+            - name: SPRING_CACHE_TYPE
+              value: "none"
+            # Spring Boot 2.4+ legacy processing
+            - name: SPRING_CONFIG_USE_LEGACY_PROCESSING
+              value: "true"
+            # Prevent Eureka registering pod names
+            - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+              value: "true"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "384Mi"
+              cpu: "250m"
+          readinessProbe:
+            tcpSocket:
+              port: 8085
+            initialDelaySeconds: 90
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adp-masters-service
+  namespace: adp
+spec:
+  selector:
+    app: adp-masters
+  ports:
+    - port: 8085
+      targetPort: 8085

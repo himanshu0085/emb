@@ -1,0 +1,103 @@
+# ============================================================
+#  ADP Platform – Private Azure Application Gateway Ingress (AKS)
+#
+#  Used for internal/VDI access via private IP 10.68.133.6.
+#  TLS terminated at App Gateway using adp-tls-cert secret.
+#  SSL redirect disabled (internal traffic).
+#  All API paths route to adp-authentication (Spring Cloud Gateway).
+#  / routes to adp-frontend (Next.js SSR).
+#
+#  Apply with:
+#    kubectl apply -f k8s/ingress-private.yaml
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: adp-ingress-private
+  namespace: adp
+  annotations:
+    appgw.ingress.kubernetes.io/request-timeout: "120"
+    appgw.ingress.kubernetes.io/ssl-redirect: "false"
+    appgw.ingress.kubernetes.io/use-private-ip: "true"
+    appgw.ingress.kubernetes.io/connection-draining: "true"
+    appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+    appgw.ingress.kubernetes.io/health-probe-path: "/favicon.ico"
+    appgw.ingress.kubernetes.io/health-probe-status-codes: "200-499"
+spec:
+  ingressClassName: azure-application-gateway
+  tls:
+    - hosts:
+        - stg.globalautotrade.com
+      secretName: adp-tls-cert
+  defaultBackend:
+    service:
+      name: adp-frontend
+      port:
+        number: 3000
+  rules:
+    - host: stg.globalautotrade.com
+      http:
+        paths:
+          - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /analytics/
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /auth/
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /chat/
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /inventory/
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /masters/
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /orders/
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /users/
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-frontend
+                port:
+                  number: 3000

@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adp-frontend
+  namespace: adp
+  labels:
+    app: adp-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: adp-frontend
+  template:
+    metadata:
+      labels:
+        app: adp-frontend
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      containers:
+        - name: adp-frontend
+          image: adpgamppruaencr.azurecr.io/adp-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: INTERNAL_API_DOMAIN
+              value: "http://adp-authentication:8080"
+            - name: NEXT_PUBLIC_API_DOMAIN
+              value: "https://www.globalautotrade.com"
+            - name: NEXT_PUBLIC_WS_DOMAIN
+              value: "wss://www.globalautotrade.com/chat/ws"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "768Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /favicon.ico
+              port: 3000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /favicon.ico
+              port: 3000
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adp-frontend
+  namespace: adp
+spec:
+  type: NodePort
+  selector:
+    app: adp-frontend
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30000

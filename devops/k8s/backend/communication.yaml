@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adp-communication
+  namespace: adp
+  labels:
+    app: adp-communication
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: adp-communication
+  template:
+    metadata:
+      labels:
+        app: adp-communication
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      containers:
+        - name: adp-communication
+          image: adpgamppruaencr.azurecr.io/adp-communication:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8084
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "staging"
+            - name: SERVER_PORT
+              value: "8084"
+            - name: SERVICEBUS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: SERVICEBUS_CONNECTION_STRING
+            - name: AZURE_SERVICE_BUS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: SERVICEBUS_CONNECTION_STRING
+            # App (staging profile) reads communication.servicebus.connection-string=${AZURE_SERVICE_BUS_CONNECTION_STRING_COMM}
+            # with NO default. Without this env var the serviceBusConfig bean fails -> crash-loop.
+            - name: AZURE_SERVICE_BUS_CONNECTION_STRING_COMM
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: SERVICEBUS_CONNECTION_STRING
+            - name: SERVICEBUS_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SERVICEBUS_TOPIC
+            - name: SERVICEBUS_SUBSCRIPTION_EMAIL
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SERVICEBUS_SUBSCRIPTION_EMAIL
+            - name: SERVICEBUS_SUBSCRIPTION_SMS
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SERVICEBUS_SUBSCRIPTION_SMS
+            - name: COMMUNICATION_EMAIL_AZURE_ACS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: ACS_EMAIL_CONNECTION_STRING
+            - name: AZURE_ACS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: ACS_EMAIL_CONNECTION_STRING
+            - name: COMMUNICATION_EMAIL_AZURE_ACS_FROM_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: ACS_EMAIL_FROM
+            - name: COMMUNICATION_EMAIL_AZURE_ACS_ENABLED
+              value: "true"
+            - name: CORS_ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: APP_CORS_ALLOWED_ORIGINS
+            - name: EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: EUREKA_URL
+            - name: SPRING_CONFIG_USE_LEGACY_PROCESSING
+              value: "true"
+            - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+              value: "true"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          readinessProbe:
+            tcpSocket:
+              port: 8084
+            initialDelaySeconds: 90
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8084
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adp-communication-service
+  namespace: adp
+spec:
+  selector:
+    app: adp-communication
+  ports:
+    - port: 8084
+      targetPort: 8084

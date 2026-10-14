@@ -1,0 +1,157 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adp-chat
+  namespace: adp
+  labels:
+    app: adp-chat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adp-chat
+  template:
+    metadata:
+      labels:
+        app: adp-chat
+    spec:
+      containers:
+        - name: adp-chat
+          image: adpgamppruaencr.azurecr.io/adp-chat:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8090
+          env:
+            - name: SPRING_MAIN_LAZY_INITIALIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_MAIN_LAZY_INITIALIZATION
+            - name: SPRING_PROFILES_ACTIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_PROFILES_ACTIVE
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: EUREKA_URL
+            - name: SPRING_DATA_MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: MONGODB_URI
+            - name: SPRING_DATA_MONGODB_DATABASE
+              value: "adp_chat"
+            # Redis — Spring Boot 3.x uses spring.data.redis.* (SPRING_DATA_REDIS_*)
+            # Properties file also reads ${REDIS_HOST:...} placeholders, so set both forms.
+            - name: SPRING_DATA_REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_HOST
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_HOST
+            - name: SPRING_DATA_REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_PORT
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_PORT
+            - name: SPRING_DATA_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: REDIS_PASSWORD
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: REDIS_PASSWORD
+            # Azure Cache for Redis requires SSL on port 6380
+            - name: SPRING_DATA_REDIS_SSL_ENABLED
+              value: "true"
+            # JWT secret for chat service auth (VAPT: moved from ConfigMap to Secret)
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: JWT_SECRET
+            - name: SPRING_ELASTICSEARCH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: ELASTICSEARCH_URL
+            - name: SPRING_ELASTICSEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: ELASTICSEARCH_API_KEY
+            # Spring Boot 2.4+ legacy processing — required for profile-specific properties
+            - name: SPRING_CONFIG_USE_LEGACY_PROCESSING
+              value: "true"
+            # Prevent Eureka registering pod names (gateway cannot resolve them)
+            - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+              value: "true"
+            # Direct k8s DNS — bypasses Eureka for inter-service calls.
+            # Without these, fetchUserRole() defaults lb://adp-users-service via Eureka.
+            # If Eureka is slow/stale, fetchUserRole() times out and defaults to ROLE_BUYER,
+            # causing sellers to query by buyerId → empty negotiations list.
+            - name: USERS_SERVICE_URL
+              value: "http://adp-users-service:8087"
+            - name: INVENTORY_SERVICE_URL
+              value: "http://adp-inventory-service:8084"
+            # Negotiation emails (seller "new proposal", counter, completed, etc.) are sent from chat
+            # via NotificationServiceImpl, which uses a plain (non-LoadBalanced) RestTemplate. Without
+            # this it defaults to lb://adp-communication-service, which the plain template cannot
+            # resolve, so every negotiation email fails silently. Direct k8s DNS fixes it.
+            - name: COMMUNICATION_SERVICE_URL
+              value: "http://adp-communication-service:8084"
+            # Chat fetches the per-transition message template from the state machine to build the
+            # negotiation chat/status text. Without this it defaults to lb://adp-statemachine-service,
+            # which fails to resolve, getTransitionConfig() returns empty, and every transition shows
+            # the generic "Status updated." fallback. Direct k8s DNS fixes it.
+            - name: STATEMACHINE_SERVICE_URL
+              value: "http://adp-statemachine-service:8086"
+            # JVM heap cap: the Dockerfile sets -Xmx512m which exceeds the old 384Mi
+            # container limit, causing OOMKill on every startup (CrashLoopBackOff → 503).
+            # 768Mi limit gives room for 512m heap + ~256m metaspace/overhead.
+            - name: JAVA_OPTS
+              value: "-Xms128m -Xmx512m -XX:+UseG1GC -XX:+UseContainerSupport"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "768Mi"
+              cpu: "500m"
+          readinessProbe:
+            tcpSocket:
+              port: 8090
+            initialDelaySeconds: 90
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8090
+            initialDelaySeconds: 120
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adp-chat-service
+  namespace: adp
+spec:
+  selector:
+    app: adp-chat
+  ports:
+    - port: 8090
+      targetPort: 8090

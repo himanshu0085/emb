@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adp-backend-config
+  namespace: adp
+data:
+  SPRING_PROFILES_ACTIVE: "dev"
+  EUREKA_URL: "http://adp-discovery:8761/eureka/"
+  # Lazy init prevents crash from optional beans like NotificationServiceImpl
+  SPRING_MAIN_LAZY_INITIALIZATION: "true"
+  MONGODB_HOST: "mongodb"
+  MONGODB_PORT: "27017"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ""
+  REDIS_SSL: "false"
+  ELASTICSEARCH_URL: "http://elasticsearch:9200"
+  # JWT secret shared across services (dev only)
+  JWT_SECRET: "VGhpcyBpcyBhIHNlY3VyZSAyNTYtYml0IGtleSBmb3IgSlcgdG9rZW4gZ2VuZXJhdGlvbiBpbiBkZXZlbG9wbWVudCBvbmx5"

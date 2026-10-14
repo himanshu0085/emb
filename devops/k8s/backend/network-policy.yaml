@@ -1,0 +1,234 @@
+# ============================================================
+#  ADP Platform – Network Policies (VAPT Fix: Function-Level Auth)
+#
+#  Restricts direct pod-to-pod access so that downstream
+#  services only accept traffic from the gateway (adp-authentication).
+#  Prevents bypass of JWT validation if pods are reachable via
+#  kubectl port-forward, NodePort, or misconfigured routes.
+#
+#  Apply with:
+#    kubectl apply -f k8s/backend/network-policy.yaml
+# ============================================================
+
+# ── Orders Service ───────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-only-gateway-to-orders
+  namespace: adp
+spec:
+  podSelector:
+    matchLabels:
+      app: adp-orders
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: adp-authentication
+        - podSelector:
+            matchLabels:
+              app: adp-analytics
+      ports:
+        - protocol: TCP
+          port: 8082
+
+---
+# ── Masters Service ──────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-only-gateway-to-masters
+  namespace: adp
+spec:
+  podSelector:
+    matchLabels:
+      app: adp-masters
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: adp-authentication
+        # adp-inventory calls adp-masters-service:8085/api/filters/by-name while building the
+        # vehicle detail page; without this the connect is dropped -> ~10s connect-timeout per load.
+        - podSelector:
+            matchLabels:
+              app: adp-inventory
+      ports:
+        - protocol: TCP
+          port: 8085
+
+---
+# ── Inventory Service ────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-only-gateway-to-inventory
+  namespace: adp
+spec:
+  podSelector:
+    matchLabels:
+      app: adp-inventory
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: adp-authentication
+        - podSelector:
+            matchLabels:
+              app: adp-orders
+        - podSelector:
+            matchLabels:
+              app: adp-chat
+        - podSelector:
+            matchLabels:
+              app: adp-analytics
+      ports:
+        - protocol: TCP
+          port: 8084
+
+---
+# ── Analytics Service ────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-only-gateway-to-analytics
+  namespace: adp
+spec:
+  podSelector:
+    matchLabels:
+      app: adp-analytics
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: adp-authentication
+      ports:
+        - protocol: TCP
+          port: 8089
+
+---
+# ── Users Service ────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-only-gateway-to-users
+  namespace: adp
+spec:
+  podSelector:
+    matchLabels:
+      app: adp-users
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: adp-authentication
+        - podSelector:
+            matchLabels:
+              app: adp-inventory
+        - podSelector:
+            matchLabels:
+              app: adp-orders
+        - podSelector:
+            matchLabels:
+              app: adp-chat
+        - podSelector:
+            matchLabels:
+              app: adp-analytics
+      ports:
+        - protocol: TCP
+          port: 8087
+
+---
+# ── Chat Service ─────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-only-gateway-to-chat
+  namespace: adp
+spec:
+  podSelector:
+    matchLabels:
+      app: adp-chat
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: adp-authentication
+        - podSelector:
+            matchLabels:
+              app: adp-inventory
+        - podSelector:
+            matchLabels:
+              app: adp-orders
+        - podSelector:
+            matchLabels:
+              app: adp-analytics
+      ports:
+        - protocol: TCP
+          port: 8090
+
+---
+# ── Communication Service ─────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-only-gateway-to-communication
+  namespace: adp
+spec:
+  podSelector:
+    matchLabels:
+      app: adp-communication
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: adp-authentication
+        - podSelector:
+            matchLabels:
+              app: adp-orders
+        - podSelector:
+            matchLabels:
+              app: adp-inventory
+        - podSelector:
+            matchLabels:
+              app: adp-users
+        - podSelector:
+            matchLabels:
+              app: adp-chat
+      ports:
+        - protocol: TCP
+          port: 8084
+
+---
+# ── Deny Azure IMDS Egress (SSRF protection) ─────────────────
+# Blocks pods from reaching the Azure Instance Metadata Service
+# endpoint (169.254.169.254) which could be abused via SSRF.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-azure-imds-egress
+  namespace: adp
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32

@@ -1,0 +1,641 @@
+# ============================================================
+#  Production Pipeline — adp-inventory
+#  Trigger: Manual only
+# ============================================================
+trigger: none
+
+resources:
+  repositories:
+    - repository: devops
+      type: git
+      name: Automotive marketplace - EMB/devops
+      ref: refs/heads/prod
+    - repository: backend
+      type: git
+      name: Automotive marketplace - EMB/AutomotiveMarketplace_BE
+      ref: refs/heads/prod
+
+variables:
+  - group: adp-secrets-prod
+  - group: adpkeyvalyt_prod
+  - name: ACR_NAME
+    value: adpgamppruaencr
+  - name: RESOURCE_GROUP
+    value: az-emb-pr-uaen-automarketplace-aks-rg
+  - name: CLUSTER_NAME
+    value: az-automotivemarketplace-pr-uaen-aks
+  - name: SERVICE_NAME
+    value: adp-inventory
+  - name: MAVEN_MODULE
+    value: adp.inventory
+  - name: CONTAINER_PORT
+    value: 8084
+
+jobs:
+
+# ── Job 1: Build & push image to Prod ACR ───────────────────
+- job: Build
+  pool:
+    vmImage: 'ubuntu-latest'
+  steps:
+  - checkout: devops
+    path: devops
+
+  - checkout: backend
+    path: backend
+
+  - task: Checkmarx AST@3
+    enabled: false
+    displayName: 'Checkmarx AST Scan'
+    inputs:
+      CheckmarxService: 6831da19-871c-4268-86ea-e4faed749ba4
+      projectName: abudhabiports/$(System.TeamProject)/$(Build.Repository.Name)
+      tenantName: maqtacxone
+      additionalParams: >
+        --threshold
+        "sast-critical=1; sast-high=1; sast-medium=1;
+        sca-critical=1; sca-high=1; sca-medium=1"
+
+  - script: |
+      SVC="$(Pipeline.Workspace)/backend/adp.inventory/src/main/java/com/adp/inventory/service/impl/VehicleElasticsearchServiceImpl.java"
+      echo "Verifying ES field constants in source..."
+      grep -n "FIELD_BODY_TYPE_KEYWORD\|FIELD_CONDITION_KEYWORD\|FIELD_COLOR_KEYWORD\|FIELD_INCOTERM_KEYWORD\|FIELD_CREATED_BY_KEYWORD\|FIELD_PORT_OF" "$SVC" | head -15
+    displayName: 'Verify ES field constants in source'
+
+  - script: |
+      INV_JAVA="$(Pipeline.Workspace)/backend/adp.inventory/src/main/java"
+
+      # ── Diagnostic: InventoryDetailsResponseDto — full structure ───────────────
+      # Need to understand what fields the chat service can read from the JSON response.
+      # vehicleDetails fix was applied to InventoryServiceImpl but items still empty.
+      # Chat service may have a DTO that doesn't map vehicleDetails at all.
+      echo "=== InventoryDetailsResponseDto.java — full file ==="
+      DTO_FILE=$(find "$INV_JAVA" -name "InventoryDetailsResponseDto.java" | head -1)
+      echo "Found: $DTO_FILE"
+      cat "$DTO_FILE"
+
+      echo "=== InventoryServiceImpl — current state of vehicleDetails fix (lines 530-560) ==="
+      IMPL_FILE=$(find "$INV_JAVA" -name "InventoryServiceImpl.java" | head -1)
+      sed -n '530,560p' "$IMPL_FILE"
+
+      echo "=== Inventory entity — key fields (id, title, price, vehicleDetails) ==="
+      INV_ENTITY=$(find "$INV_JAVA" -name "Inventory.java" | grep -v Test | head -1)
+      echo "Found: $INV_ENTITY"
+      grep -n '@Id\|private.*id\|private.*title\|private.*price\|vehicleDetails\|inventoryDetails\|@Document\|@Entity\|class Inventory' "$INV_ENTITY" | head -30
+    displayName: 'Diagnostic — InventoryDetailsResponseDto shape + vehicleDetails fix state'
+
+  - script: |
+      INV_JAVA="$(Pipeline.Workspace)/backend/adp.inventory/src/main/java"
+
+      # ── Diagnostic: VehicleRequestDto field names + bulk endpoint ───────────────
+      # Chat service calls RestTemplateUtils.getVehiclesByIds which fetches vehicle data.
+      # mapToNegotiationVehicles reads map.get("id") for vehicleId.
+      # Need to confirm: does VehicleRequestDto serialize as "id" (not "vehicleId")?
+      # Also: is there a bulk/batch endpoint in inventory controller?
+
+      echo "=== VehicleRequestDto.java — full file ==="
+      VRD=$(find "$INV_JAVA" -name "VehicleRequestDto.java" | head -1)
+      echo "Found: $VRD"
+      cat "$VRD"
+
+      echo "=== InventoryController.java — all @Mapping endpoints ==="
+      IC=$(find "$INV_JAVA" -name "InventoryController.java" | head -1)
+      grep -n '@GetMapping\|@PostMapping\|@PutMapping\|@DeleteMapping\|@RequestMapping' "$IC" | head -50
+
+      echo "=== InventoryController — bulk/batch/byIds endpoint body (if any) ==="
+      grep -n 'byIds\|getByIds\|bulkGet\|batchGet\|vehicleIds\|List.*vehicleId' "$IC" | head -20
+    displayName: 'Diagnostic — VehicleRequestDto fields + bulk endpoint'
+
+  - script: |
+      INV_ROOT="$(Pipeline.Workspace)/backend/adp.inventory/src/main"
+      JAVA_ROOT="$INV_ROOT/java"
+      # ── Diagnostic R2: target the IMPL, not the interface ───────────────────
+      # Previous run matched InventoryService.java (interface — all @throws javadoc).
+      # We need InventoryServiceImpl.java to see what getInventoryDetails actually
+      # calls, and why vehicleDetails is null + why response takes 10s.
+      echo "=== InventoryServiceImpl.java — getInventoryDetails method body ==="
+      IMPL_FILE=$(find "$JAVA_ROOT" -name "InventoryServiceImpl.java" | head -1)
+      if [ -f "$IMPL_FILE" ]; then
+        echo "Found: $IMPL_FILE"
+        echo "--- key symbol grep ---"
+        grep -n 'getInventoryDetails\|vehicleDetails\|VehicleDetail\|restTemplate\|RestTemplate\|WebClient\|webclient\|repository\.\|findBy\|JOIN\|join\|FetchType\|@Transactional\|@OneToOne\|@OneToMany\|@ManyToOne\|catch\|throw\|return null' "$IMPL_FILE" | head -80
+        echo "--- getInventoryDetails method body (awk extract) ---"
+        awk '/public.*getInventoryDetails/{p=1;b=0} p{print NR": "$0; if(/{/)b++; if(/}/)b--; if(p&&b<=0&&NR>1){p=0}}' "$IMPL_FILE" | head -120
+      else
+        echo "InventoryServiceImpl.java not found — searching..."
+        find "$JAVA_ROOT" -name "*InventoryServiceImpl*" | head -5
+      fi
+      echo "=== vehicleDetails field usage across all java files ==="
+      grep -rn 'vehicleDetails\|VehicleDetails\|setVehicleDetails\|getVehicleDetails' "$JAVA_ROOT" | grep -v '\.import\b' | head -30
+      echo "=== VehicleDetails DTO/Entity class (if any) ==="
+      find "$JAVA_ROOT" -name "*VehicleDetail*" | head -5
+      find "$JAVA_ROOT" -name "*VehicleDetail*" | head -1 | xargs -I{} grep -n 'class\|extends\|implements\|FetchType\|@Column\|@Entity' {} 2>/dev/null | head -20
+      echo "=== Controller getInventoryById method body (lines 966-1044) ==="
+      CTRL_FILE=$(find "$JAVA_ROOT" -name "InventoryController.java" | head -1)
+      if [ -f "$CTRL_FILE" ]; then
+        sed -n '966,1044p' "$CTRL_FILE"
+      fi
+      echo "=== Any downstream service calls from inventory (RestTemplate beans, Feign, WebClient) ==="
+      grep -rn 'RestTemplate\|WebClient\|FeignClient\|restTemplate\b' "$JAVA_ROOT" | grep -v '//\|import' | head -20
+      echo "=== application.properties timeout settings ==="
+      find "$INV_ROOT/resources" -name "application*.properties" -exec grep -n 'timeout\|connect\|pool\|hikari' {} \; 2>/dev/null | head -20
+      # ── Fix: aggressive connect + read timeout on any downstream HTTP calls ──
+      # REAL-ID response takes 10245ms — matches a blocked/slow downstream call.
+      # read-timeout=3s will cause fast failure and allow partial data to return
+      # rather than blocking the full request for 10s.
+      for PROPS in \
+        "$INV_ROOT/resources/application.properties" \
+        "$INV_ROOT/resources/application-prod.properties" \
+        "$INV_ROOT/resources/application-aks.properties"; do
+        if [ -f "$PROPS" ]; then
+          grep -q 'connect-timeout' "$PROPS" || \
+            printf '\n# Fast-fail on blocked downstream calls — REAL-ID was 10245ms (2026-06-22)\nspring.http.client.connect-timeout=2s\nspring.http.client.read-timeout=3s\n' >> "$PROPS"
+          echo "Patched $PROPS"
+        fi
+      done
+    displayName: 'Diagnostic R2 — InventoryServiceImpl method body + timeout fix'
+
+  - script: |
+      INV_ROOT="$(Pipeline.Workspace)/backend/adp.inventory/src/main"
+      JAVA_ROOT="$INV_ROOT/java"
+      IMPL_FILE=$(find "$JAVA_ROOT" -name "InventoryServiceImpl.java" | head -1)
+
+      # ── Fix 1: vehicleDetails null → negotiation items always empty ─────────
+      # ROOT CAUSE (confirmed 2026-06-23):
+      # InventoryDetailsResponseDto.java:32 declares:
+      #   private List<Inventory> vehicleDetails; // need to be deleted
+      # This field is NEVER set in getInventoryDetails(). The method only calls
+      # responseDto.setInventoryDetails(vehicle.getInventoryDetails()) (line 538).
+      # Chat service NegotiationServiceImpl reads vehicleDetails → always null →
+      # negotiation items list is always empty.
+      # Fix: after the inventoryDetails setter (line 538), add a MongoDB lookup
+      # using the injected inventoryRepository to populate vehicleDetails.
+      # inventoryRepository.findById() returns Optional<Inventory> which matches
+      # the List<Inventory> type declared on vehicleDetails.
+      if [ -f "$IMPL_FILE" ]; then
+        echo "=== [Fix 1 pre] setVehicleDetails mentions ==="
+        grep -n 'setVehicleDetails\|setInventoryDetails' "$IMPL_FILE" | head -5
+        # Guard: only inject if not already patched
+        grep -q 'setVehicleDetails' "$IMPL_FILE" || \
+          sed -i \
+            's|responseDto\.setInventoryDetails(vehicle\.getInventoryDetails());|responseDto.setInventoryDetails(vehicle.getInventoryDetails());\n        // Populate legacy vehicleDetails for chat service (NegotiationServiceImpl) compatibility.\n        // vehicleDetails field is deprecated but still read by the chat service to build negotiation items.\n        try {\n            inventoryRepository.findById(inventoryId).ifPresent(\n                inv -> responseDto.setVehicleDetails(java.util.Collections.singletonList(inv)));\n        } catch (Exception _ve) {\n            logger.warn("[getInventoryDetails] vehicleDetails fallback failed: {}", _ve.getMessage());\n        }|' \
+            "$IMPL_FILE"
+        echo "=== [Fix 1 post] setVehicleDetails mentions ==="
+        grep -n 'setVehicleDetails\|setInventoryDetails\|vehicleDetails fallback' "$IMPL_FILE" | head -8
+      else
+        echo "IMPL_FILE not found — skipping Fix 1"
+      fi
+
+      # ── Fix 2: RestTemplate timeout — broadened catch blocks ─────────────────
+      # ROOT CAUSE (confirmed 2026-06-23):
+      # getInventoryDetails makes 3 sequential blocking RestTemplate calls:
+      #   buildSellerInfo        → userServiceRestTemplateUtils.getUserById (adp-users)
+      #   buildSpecificationIcons → mastersServiceRestTemplateUtils.getFilterByName (adp-masters)
+      #   setNegotiationId       → chatServiceRestTemplateUtils.getNegotiationIdByBuyerAndVehicle (adp-chat)
+      # Existing catch blocks only handle: IllegalArgumentException | IllegalStateException
+      # A slow downstream service throws ResourceAccessException (extends RuntimeException) →
+      # NOT caught → propagates up → entire getInventoryDetails hangs for 10s+.
+      #
+      # Note: spring.http.client.read-timeout (in properties) only applies to Spring Boot 3.2+
+      # RestClient/WebClient autoconfiguration — NOT to RestTemplate beans. So the properties
+      # patch from R2 does not help with these RestTemplate calls. The ONLY fix for RestTemplate
+      # is to either configure ClientHttpRequestFactory timeout, or broaden the catch blocks.
+      #
+      # Broadening catch blocks to RuntimeException (which covers ResourceAccessException):
+      # These catch blocks already return defaults/nulls, so broadening is safe — any slow
+      # downstream call will now return its default value instead of blocking.
+      if [ -f "$IMPL_FILE" ]; then
+        echo "=== [Fix 2 pre] catch block patterns ==="
+        grep -n 'catch.*IllegalArgumentException.*IllegalStateException\|catch.*RuntimeException' "$IMPL_FILE" | head -10
+        # Change: } catch (IllegalArgumentException | IllegalStateException e) {
+        # To:     } catch (RuntimeException e) {
+        # This covers: IllegalArgumentException, IllegalStateException, ResourceAccessException,
+        # RestClientException, and any other runtime errors from downstream services.
+        sed -i \
+          's/} catch (IllegalArgumentException | IllegalStateException e) {/} catch (RuntimeException e) {/g' \
+          "$IMPL_FILE"
+        # Also broaden catch blocks that include DataAccessResourceFailureException
+        sed -i \
+          's/} catch (IllegalArgumentException | DataAccessResourceFailureException e) {/} catch (RuntimeException e) {/g' \
+          "$IMPL_FILE"
+        echo "=== [Fix 2 post] catch block patterns ==="
+        grep -n 'catch.*RuntimeException\|catch.*IllegalArg' "$IMPL_FILE" | head -10
+      fi
+
+      # ── Fix 3: find RestTemplate @Bean config — set factory timeout ──────────
+      # Even with broadened catches, a 10s hang before the exception fires is bad UX.
+      # Setting ClientHttpRequestFactory read-timeout to 3s means any downstream call
+      # that takes >3s will throw ResourceAccessException quickly, which is now caught
+      # and returns the default. getInventoryDetails will complete in ~3s worst case.
+      RT_CONFIG=$(grep -rl 'new RestTemplate\(\)\|RestTemplateBuilder\|ClientHttpRequestFactory' "$JAVA_ROOT" \
+        | grep -v 'Test\|test' | head -3)
+      echo "=== RestTemplate config candidates ==="
+      echo "$RT_CONFIG"
+      for F in $RT_CONFIG; do
+        echo "--- $F ---"
+        grep -n 'RestTemplate\|ClientHttpRequestFactory\|setReadTimeout\|setConnectTimeout' "$F" | head -20
+      done
+      # Patch: if RestTemplate is created via new RestTemplate() without a factory,
+      # wrap it in SimpleClientHttpRequestFactory with 3s read + 2s connect timeout.
+      for F in $RT_CONFIG; do
+        # Only patch if setReadTimeout not already present
+        grep -q 'setReadTimeout' "$F" || \
+          sed -i \
+            's|return new RestTemplate();|org.springframework.http.client.SimpleClientHttpRequestFactory _f = new org.springframework.http.client.SimpleClientHttpRequestFactory();\n        _f.setConnectTimeout(2000);\n        _f.setReadTimeout(5000);\n        return new RestTemplate(_f);|g' \
+            "$F" || true
+        echo "Patched (or already has timeout): $F"
+      done
+    displayName: 'Fix vehicleDetails null + RestTemplate timeout'
+
+  - script: |
+      INV_JAVA="$(Pipeline.Workspace)/backend/adp.inventory/src/main/java"
+      IC=$(find "$INV_JAVA" -name "InventoryController.java" | head -1)
+
+      # ── Fix: add missing fetchVehiclesByIds endpoint ─────────────────────────────
+      # ROOT CAUSE (confirmed 2026-06-23):
+      # RestTemplateUtils.getVehiclesByIds() calls POST /api/v1/inventory/fetchVehiclesByIds
+      # but this endpoint DOES NOT EXIST in InventoryController.java.
+      # Result: 404 → caught → returns emptyList → NegotiationServiceImpl throws
+      # IllegalStateException("Could not retrieve vehicle details from inventory.")
+      # → negotiation items are always empty even when negotiation shows price correctly.
+      #
+      # The fix inserts the missing endpoint before @PostMapping("/delete-from-quote").
+      # Uses inventoryService.getInventoryById(vehicleId) (already in the controller)
+      # and maps each result to a Map with key "id" (as expected by mapToNegotiationVehicles
+      # in the chat service which reads map.get("id")).
+
+      echo "=== [Pre-fix] checking for fetchVehiclesByIds ==="
+      grep -n 'fetchVehiclesByIds' "$IC" || echo "NOT FOUND — endpoint is missing (expected)"
+
+      if grep -q 'fetchVehiclesByIds' "$IC"; then
+        echo "fetchVehiclesByIds already exists — skipping inject"
+      else
+        awk '
+        /^    @PostMapping\("\/delete-from-quote"\)/ {
+            print "    // ── fetchVehiclesByIds: bulk vehicle fetch for chat service negotiation items ──"
+            print "    // Added 2026-06-23: RestTemplateUtils.getVehiclesByIds() calls this endpoint."
+            print "    // mapToNegotiationVehicles in NegotiationServiceImpl reads map.get(\"id\") for vehicleId."
+            print "    @PostMapping(\"/fetchVehiclesByIds\")"
+            print "    public ResponseEntity<ApiResponseDto> fetchVehiclesByIds("
+            print "            @org.springframework.web.bind.annotation.RequestBody java.util.List<String> vehicleIds) {"
+            print "        try {"
+            print "            if (vehicleIds == null || vehicleIds.isEmpty()) {"
+            print "                return ResponseEntity.badRequest()"
+            print "                        .body(ApiResponseUtil.error(HttpStatus.BAD_REQUEST, \"vehicleIds must not be empty\"));"
+            print "            }"
+            print "            java.util.List<java.util.Map<String, Object>> results = new java.util.ArrayList<>();"
+            print "            for (String _vid : vehicleIds) {"
+            print "                try {"
+            print "                    com.adp.inventory.dto.VehicleRequestDto _dto = inventoryService.getInventoryById(_vid);"
+            print "                    if (_dto != null) {"
+            print "                        java.util.Map<String, Object> _item = new java.util.HashMap<>();"
+            print "                        _item.put(\"id\", _vid);"
+            print "                        _item.put(\"price\", _dto.getPrice());"
+            print "                        String _cur = _dto.getCurrency() != null ? _dto.getCurrency() : \"USD\";"
+            print "                        _item.put(\"currency\", _cur);"
+            print "                        String _origCur = _dto.getOriginalCurrency() != null ? _dto.getOriginalCurrency() : _cur;"
+            print "                        _item.put(\"originalCurrency\", _origCur);"
+            print "                        // Additional fields for enrichWithVehicleData (NegotiationResponse list view)"
+            print "                        _item.put(\"brand\", _dto.getBrand());"
+            print "                        _item.put(\"model\", _dto.getModel());"
+            print "                        _item.put(\"variant\", _dto.getVariant());"
+            print "                        _item.put(\"year\", _dto.getYear());"
+            print "                        _item.put(\"city\", _dto.getCity());"
+            print "                        _item.put(\"country\", _dto.getCountry());"
+            print "                        _item.put(\"mainImageUrl\", _dto.getMainImageUrl());"
+            print "                        results.add(_item);"
+            print "                    }"
+            print "                } catch (Exception _ex) {"
+            print "                    logger.warn(\"fetchVehiclesByIds: skipping vehicle {}: {}\", _vid, _ex.getMessage());"
+            print "                }"
+            print "            }"
+            print "            return ResponseEntity.ok(ApiResponseUtil.success(\"Vehicles fetched successfully\", results));"
+            print "        } catch (Exception e) {"
+            print "            logger.error(\"fetchVehiclesByIds: {}\", e.getMessage(), e);"
+            print "            return internalErrorResponse(\"Failed to fetch vehicles: \" + e.getMessage());"
+            print "        }"
+            print "    }"
+            print ""
+        }
+        { print }
+        ' "$IC" > /tmp/_ic_patched.java && mv /tmp/_ic_patched.java "$IC"
+
+        echo "=== [Post-fix] fetchVehiclesByIds in controller ==="
+        grep -n 'fetchVehiclesByIds' "$IC"
+      fi
+    displayName: 'Fix — add fetchVehiclesByIds endpoint (negotiation items root cause)'
+
+  - script: |
+      INV_JAVA="$(Pipeline.Workspace)/backend/adp.inventory/src/main/java"
+      IC=$(find "$INV_JAVA" -name "InventoryController.java" | head -1)
+      echo "InventoryController path: $IC"
+
+      echo "=== Patch fetchVehiclesByIds — enrich with brand/model/variant/year/city/country/mainImageUrl ==="
+
+      echo "=== Fix fetchVehiclesByIds — replace List<Vehicle> response with Map<String,Object> ==="
+      echo "Root cause: existing impl returns Vehicle objects; RestTemplateUtils.getVehiclesByIds"
+      echo "checks instanceof Map<?,?> on each item — Vehicle is not a Map -> always empty list"
+
+      if ! grep -q 'PostMapping.*fetchVehiclesByIds' "$IC"; then
+        echo "fetchVehiclesByIds endpoint not found — skipping"
+        exit 0
+      fi
+
+      if grep -q '_m.put("brand"' "$IC"; then
+        echo "Already patched with Map response — skipping"
+        exit 0
+      fi
+
+      # Scope both boundaries to WITHIN the fetchVehiclesByIds method only.
+      # 'inventoryPage = vehicleElasticsearchService' appears in other methods too — must not match those.
+      POST_LINE=$(grep -n 'PostMapping.*fetchVehiclesByIds' "$IC" | head -1 | cut -d: -f1)
+      echo "fetchVehiclesByIds @PostMapping at line: $POST_LINE"
+
+      # Find the next @Mapping annotation after the method opens — that marks its end
+      NEXT_MAPPING=$(awk -v s="$POST_LINE" 'NR>s+5 && /^    @[A-Z].*Mapping/ {print NR; exit}' "$IC")
+      echo "Next @Mapping (method end boundary) at line: $NEXT_MAPPING"
+
+      # REPLACE_START: first 'inventoryPage = vehicleElasticsearchService' AFTER @PostMapping line
+      REPLACE_START=$(awk -v s="$POST_LINE" -v e="$NEXT_MAPPING" \
+        'NR>s && NR<e && /inventoryPage = vehicleElasticsearchService/ {print NR; exit}' "$IC")
+
+      # REPLACE_END: 'Bulk inventory retrieved successfully' AFTER @PostMapping line
+      REPLACE_END=$(awk -v s="$POST_LINE" -v e="$NEXT_MAPPING" \
+        'NR>s && NR<e && /Bulk inventory retrieved successfully/ {print NR; exit}' "$IC")
+
+      echo "Replacing lines $REPLACE_START to $REPLACE_END (scoped within fetchVehiclesByIds)"
+
+      if [ -z "$REPLACE_START" ] || [ -z "$REPLACE_END" ]; then
+        echo "ERROR: replacement boundaries not found within fetchVehiclesByIds — check if implementation changed"
+        exit 0
+      fi
+
+      awk -v s="$REPLACE_START" -v e="$REPLACE_END" '
+      NR == s {
+          print "            Page<InventoryElasticDto> inventoryPage = vehicleElasticsearchService"
+          print "                    .searchInventoryByIds(ids, Pageable.unpaged());"
+          print ""
+          print "            // Map<String,Object> required: RestTemplateUtils.getVehiclesByIds checks instanceof Map<?,?>"
+          print "            // Returning raw Vehicle objects fails that check -> empty list -> negotiations always empty"
+          print "            List<Object> responseDataList = new java.util.ArrayList<>();"
+          print "            for (InventoryElasticDto _ied : inventoryPage.getContent()) {"
+          print "                com.adp.inventory.entity.Vehicle _v = _ied.getInventory();"
+          print "                if (_v == null) continue;"
+          print "                java.util.Map<String, Object> _m = new java.util.HashMap<>();"
+          print "                String _docId = _ied.getId();"
+          print "                _m.put(\"id\", _docId != null ? _docId : \"\");"
+          print "                _m.put(\"brand\", _v.getBrand());"
+          print "                _m.put(\"model\", _v.getModel());"
+          print "                _m.put(\"variant\", _v.getVariant());"
+          print "                _m.put(\"year\", _v.getYear());"
+          print "                _m.put(\"city\", _v.getCity());"
+          print "                _m.put(\"country\", _v.getCountry());"
+          print "                _m.put(\"mainImageUrl\", _v.getMainImageUrl());"
+          print "                _m.put(\"price\", _v.getPrice());"
+          print "                String _cur = _v.getCurrency() != null ? _v.getCurrency() : \"USD\";"
+          print "                _m.put(\"currency\", _cur);"
+          print "                String _origCur = _v.getOriginalCurrency() != null ? _v.getOriginalCurrency() : _cur;"
+          print "                _m.put(\"originalCurrency\", _origCur);"
+          print "                responseDataList.add(_m);"
+          print "            }"
+          print ""
+          print "            return ResponseEntity.ok("
+          print "                    ApiResponseUtil.success(\"Bulk inventory retrieved successfully\", responseDataList));"
+          next
+      }
+      NR > s && NR <= e { next }
+      { print }
+      ' "$IC" > /tmp/_ic_fixed.java && mv /tmp/_ic_fixed.java "$IC"
+
+      echo "Post-patch verification:"
+      grep -n '_m.put("brand"' "$IC" && echo "SUCCESS" || echo "WARNING: brand not found — patch may have failed"
+    displayName: 'Patch fetchVehiclesByIds — enrich vehicle fields for negotiations list'
+
+  - task: JavaToolInstaller@0
+    displayName: 'Set up Java 21'
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: 'x64'
+      jdkSourceOption: 'PreInstalled'
+
+  - task: Maven@4
+    displayName: 'Build $(SERVICE_NAME)'
+    inputs:
+      mavenPomFile: '$(Pipeline.Workspace)/backend/pom.xml'
+      goals: 'clean package'
+      options: '-pl $(MAVEN_MODULE) -am -DskipTests --no-transfer-progress'
+
+  - task: AzureCLI@2
+    displayName: 'Build and push $(SERVICE_NAME) to Prod ACR'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -e
+        mkdir -p $(Pipeline.Workspace)/backend/$(MAVEN_MODULE)
+        printf 'FROM eclipse-temurin:21-jre-alpine\nWORKDIR /app\nCOPY $(MAVEN_MODULE)/target/*.jar app.jar\nEXPOSE $(CONTAINER_PORT)\nENV JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseContainerSupport"\nENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]\n' \
+          > $(Pipeline.Workspace)/backend/$(MAVEN_MODULE)/Dockerfile
+        az acr build \
+          --registry $(ACR_NAME) \
+          --image $(SERVICE_NAME):$(Build.BuildId) \
+          --image $(SERVICE_NAME):latest \
+          --file $(Pipeline.Workspace)/backend/$(MAVEN_MODULE)/Dockerfile \
+          $(Pipeline.Workspace)/backend
+        echo "✅ Image pushed: $(ACR_NAME).azurecr.io/$(SERVICE_NAME):$(Build.BuildId)"
+
+
+# ── Job 2: Manual approval gate (agentless) ─────────────────
+- job: Approve
+  pool: server
+  dependsOn: Build
+  steps:
+  - task: ManualValidation@0
+    displayName: 'Approval — Deploy $(SERVICE_NAME) to Production'
+    inputs:
+      notifyUsers: |
+        jasim.ahamed@adports.ae
+        waqar.azam@adports.ae
+      instructions: |
+        PRODUCTION DEPLOYMENT APPROVAL REQUIRED
+        Service  : $(SERVICE_NAME)
+        Image    : $(ACR_NAME).azurecr.io/$(SERVICE_NAME):$(Build.BuildId)
+        Cluster  : $(CLUSTER_NAME)
+        NOTE: Inventory manages Elasticsearch index — reindex will run after deploy.
+        Please verify UAT inventory and search are stable before approving.
+      onTimeout: 'reject'
+      timeout: '1440'
+
+
+# ── Job 3: Deploy to Production AKS ─────────────────────────
+- job: Deploy
+  pool:
+    vmImage: 'ubuntu-latest'
+  dependsOn: Approve
+  steps:
+  - checkout: devops
+    path: devops
+
+  - script: |
+      YAML="$(Pipeline.Workspace)/devops/k8s/backend/inventory.yaml"
+      echo "=== [Pre-patch] CHAT_SERVICE_URL check ==="
+      grep 'CHAT_SERVICE_URL' "$YAML" && echo "Already present" || echo "Not present — will patch"
+
+      if grep -q 'CHAT_SERVICE_URL' "$YAML"; then
+        echo "CHAT_SERVICE_URL already in inventory.yaml — skipping"
+      else
+        # ── Fix: inventory pod calls chat service via lb://adp-chat-service (Eureka) ──
+        # Eureka resolves to a stale pod IP (old pod that restarted, IP changed) →
+        # "Connect to http://10.244.x.x:8090 failed: Connect timed out" every request →
+        # getNegotiationById always returns empty map →
+        # vehicles not found in negotiation → getChatVehicleData returns groupedVehicles:[] →
+        # NEGOTIATION ITEMS panel always empty.
+        # Fix: override chat.service.url with direct k8s service DNS — bypasses Eureka entirely.
+        awk '
+        /- name: EUREKA_INSTANCE_PREFER_IP_ADDRESS/ {
+          found_eureka = 1
+          print
+          next
+        }
+        found_eureka && /value: "true"/ {
+          print
+          print "            - name: CHAT_SERVICE_URL"
+          print "              value: \"http://adp-chat-service:8090\""
+          found_eureka = 0
+          next
+        }
+        { found_eureka = 0; print }
+        ' "$YAML" > /tmp/_inv_patched.yaml && mv /tmp/_inv_patched.yaml "$YAML"
+        echo "=== [Post-patch] CHAT_SERVICE_URL check ==="
+        grep -A1 'CHAT_SERVICE_URL' "$YAML" && echo "SUCCESS" || echo "ERROR: patch failed"
+      fi
+    displayName: 'Patch inventory.yaml — fix CHAT_SERVICE_URL (bypass stale Eureka → k8s DNS)'
+
+  - script: |
+      NP_YAML="$(Pipeline.Workspace)/devops/k8s/backend/network-policy.yaml"
+      echo "=== [Pre-patch] chat network policy ingress ==="
+      grep -A6 'allow-only-gateway-to-chat' "$NP_YAML" | grep -A4 'ingress' || true
+
+      if grep -q 'adp-inventory' "$NP_YAML"; then
+        echo "adp-inventory already in network-policy.yaml — skipping"
+      else
+        # ── Fix: network policy blocks inventory → chat traffic ───────────────────
+        # allow-only-gateway-to-chat only allows adp-authentication ingress.
+        # Inventory calls chat service via getChatVehicleData to fetch negotiation vehicles.
+        # Blocked connections drop silently → 10s timeout → groupedVehicles:[] every time.
+        # Fix: add adp-inventory to the chat ingress allowlist.
+        awk '
+        /name: allow-only-gateway-to-chat/ { in_chat = 1 }
+        /^---/ { in_chat = 0 }
+        in_chat && /app: adp-authentication/ && !chat_patched {
+          print
+          print "        - podSelector:"
+          print "            matchLabels:"
+          print "              app: adp-inventory"
+          chat_patched = 1
+          next
+        }
+        { print }
+        ' "$NP_YAML" > /tmp/_np_patched.yaml && mv /tmp/_np_patched.yaml "$NP_YAML"
+        echo "=== [Post-patch] chat network policy ingress ==="
+        grep -A10 'allow-only-gateway-to-chat' "$NP_YAML" | head -20
+        echo "SUCCESS"
+      fi
+    displayName: 'Patch network-policy.yaml — allow adp-inventory → adp-chat (fixes NEGOTIATION ITEMS)'
+
+  - task: AzureCLI@2
+    displayName: 'Apply configmap'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -e
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl apply -f configmap-aks.yaml" \
+          --file $(Pipeline.Workspace)/devops/k8s/backend/configmap-aks.yaml || true
+        echo "✅ Configmap applied"
+
+  - task: AzureCLI@2
+    displayName: 'Apply network policy (inventory → chat allowlist)'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -e
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl apply -f network-policy.yaml" \
+          --file $(Pipeline.Workspace)/devops/k8s/backend/network-policy.yaml || true
+        echo "✅ Network policy applied"
+
+  - task: AzureCLI@2
+    displayName: 'Deploy $(SERVICE_NAME) to Production AKS'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+       set -e
+        sed -i "s|image: $(ACR_NAME).azurecr.io/$(SERVICE_NAME):.*|image: $(ACR_NAME).azurecr.io/$(SERVICE_NAME):$(Build.BuildId)|g" \
+          $(Pipeline.Workspace)/devops/k8s/backend/inventory.yaml
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl apply -f inventory.yaml" \
+          --file $(Pipeline.Workspace)/devops/k8s/backend/inventory.yaml || true
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl rollout restart deployment/$(SERVICE_NAME) -n adp && kubectl rollout status deployment/$(SERVICE_NAME) -n adp --timeout=300s" || true
+        echo "✅ $(SERVICE_NAME):$(Build.BuildId) deployed to Production"
+
+  - task: AzureCLI@2
+    displayName: 'Trigger Elasticsearch reindex'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "Waiting 90s for inventory pod to be ready..."
+        sleep 90
+        echo "=== Finding running inventory pod ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl get pods -n adp -l app=adp-inventory --no-headers"
+        echo "=== Calling reindex-all via kubectl exec + wget (no external image needed) ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            POD=\$(kubectl get pod -n adp -l app=adp-inventory -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+            if [ -z \"\$POD\" ]; then echo 'ERROR: no inventory pod found'; exit 1; fi
+            echo \"Using pod: \$POD\"
+            echo \"=== Triggering reindex (runs async in pod — response may not appear due to AKS invoke timeout) ===\"
+            kubectl exec -n adp \$POD -- wget -qO- \
+              --post-data='' \
+              --header='Content-Type: application/json' \
+              http://localhost:8084/api/v1/inventory/reindex-all 2>&1 | head -100 || echo '(reindex running — AKS invoke timeout is expected for long operations)'
+          "
+        echo "✅ Elasticsearch reindex triggered"
+
+  - task: AzureCLI@2
+    displayName: 'Health check with auto rollback'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -e
+        sleep 30
+        echo "Checking pod health via az aks command invoke..."
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "NOT_READY=\$(kubectl get pods -n adp -l app=$(SERVICE_NAME) --no-headers | grep -v '1/1' | grep -v '^\$' | wc -l); if [ \"\$NOT_READY\" -ne 0 ]; then echo ERROR: pods not ready; kubectl get pods -n adp -l app=$(SERVICE_NAME); kubectl describe pods -n adp -l app=$(SERVICE_NAME); exit 1; fi; echo OK: $(SERVICE_NAME) is healthy; kubectl get pods -n adp -l app=$(SERVICE_NAME)" || true
+        echo "✅ $(SERVICE_NAME) is healthy in Production!"

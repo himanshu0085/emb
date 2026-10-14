@@ -1,0 +1,48 @@
+trigger: none
+
+variables:
+- group: adp-secrets-uat
+- name: RESOURCE_GROUP
+  value: az-emb-uat-np-uaen-automarketplace-aks-rg
+- name: CLUSTER_NAME
+  value: az-automotivemarketplace-uat-uaen-aks
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+
+  - task: AzureCLI@2
+    displayName: '1 - Apply private ingress (adds missing /chat/, /analytics/, /orders/ routes)'
+    inputs:
+      azureSubscription: 'subs-adports-prod (0a249c66-024e-4317-987f-edb5c27bd6dc)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription 99c49bee-6b2c-4639-b724-bc82668bcafb
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl apply -f ingress-private.yaml -n adp" \
+          --file k8s/ingress-private.yaml
+
+  - task: AzureCLI@2
+    displayName: '2 - Verify private ingress paths after apply'
+    inputs:
+      azureSubscription: 'subs-adports-prod (0a249c66-024e-4317-987f-edb5c27bd6dc)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription 99c49bee-6b2c-4639-b724-bc82668bcafb
+        echo "=== Waiting 30s for App Gateway to sync ==="
+        sleep 30
+        echo "=== adp-ingress-private paths ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl get ingress adp-ingress-private -n adp -o jsonpath='{range .spec.rules[*]}{range .http.paths[*]}{\"  \"}{.path}{\" -> \"}{.backend.service.name}{\"\\n\"}{end}{end}'"
+        echo "=== Probe /chat/api/negotiations/initiate via private ingress ==="
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl run curl-test --image=curlimages/curl --restart=Never --rm -i -n adp -- curl -sk -X POST -H 'Host: stg.globalautotrade.com' https://10.68.133.6/chat/api/negotiations/initiate -o /dev/null -w 'HTTP Status: %{http_code}' 2>&1 || true"

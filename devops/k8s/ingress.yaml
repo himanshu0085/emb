@@ -1,0 +1,197 @@
+# ============================================================
+#  ADP Platform – Azure Application Gateway Ingress (AKS)
+#
+#  TLS terminated at App Gateway using wildcard cert *.globalautotrade.com.
+#  HTTP automatically redirects to HTTPS.
+#  /api/, /analytics/, /chat/, /inventory/, /masters/,
+#  /orders/, /users/ all route to adp-authentication (Spring Cloud Gateway).
+#  / routes to adp-frontend (Next.js SSR).
+#
+#  Apply with:
+#    kubectl apply -f k8s/ingress.yaml
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: adp-ingress
+  namespace: adp
+  annotations:
+    appgw.ingress.kubernetes.io/request-timeout: "120"
+    appgw.ingress.kubernetes.io/ssl-redirect: "true"
+    appgw.ingress.kubernetes.io/connection-draining: "true"
+    appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+    appgw.ingress.kubernetes.io/health-probe-path: "/favicon.ico"
+    appgw.ingress.kubernetes.io/health-probe-status-codes: "200-499"
+    appgw.ingress.kubernetes.io/appgw-ssl-certificate: "star-globalautotrade-com"
+spec:
+  ingressClassName: azure-application-gateway
+  tls:
+    - hosts:
+        - www.globalautotrade.com
+  defaultBackend:
+    service:
+      name: adp-frontend
+      port:
+        number: 3000
+  rules:
+    - host: www.globalautotrade.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /analytics
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /chat
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /inventory
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /masters
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /orders
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /users
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /statemachine
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-frontend
+                port:
+                  number: 3000
+---
+# ============================================================
+#  Private listener — AGW private frontend IP (internal access)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: adp-ingress-private
+  namespace: adp
+  annotations:
+    appgw.ingress.kubernetes.io/request-timeout: "120"
+    appgw.ingress.kubernetes.io/connection-draining: "true"
+    appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+    appgw.ingress.kubernetes.io/health-probe-path: "/favicon.ico"
+    appgw.ingress.kubernetes.io/health-probe-status-codes: "200-499"
+    appgw.ingress.kubernetes.io/ssl-redirect: "true"
+    appgw.ingress.kubernetes.io/use-private-ip: "true"
+    appgw.ingress.kubernetes.io/appgw-ssl-certificate: "star-globalautotrade-com"
+spec:
+  ingressClassName: azure-application-gateway
+  tls:
+    - hosts:
+        - www.globalautotrade.com
+  defaultBackend:
+    service:
+      name: adp-frontend
+      port:
+        number: 3000
+  rules:
+    - host: www.globalautotrade.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /analytics
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /chat
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /inventory
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /masters
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /orders
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /users
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /statemachine
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-authentication
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: adp-frontend
+                port:
+                  number: 3000

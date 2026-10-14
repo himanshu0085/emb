@@ -1,0 +1,222 @@
+# ============================================================
+#  Production Rollback Pipeline
+#  Automotive Marketplace — ADP Platform
+#
+#  Trigger: Manual only
+#  Purpose: Rollback one or all production services
+#           to previous version or specific image tag
+# ============================================================
+
+trigger: none  # Manual trigger only
+
+parameters:
+  - name: serviceName
+    displayName: "Service to Rollback"
+    type: string
+    default: "ALL"
+    values:
+      - ALL
+      - adp-actions
+      - adp-analytics
+      - adp-authentication
+      - adp-chat
+      - adp-cms
+      - adp-communication
+      - adp-configuration
+      - adp-discovery
+      - adp-enquiry
+      - adp-frontend
+      - adp-inventory
+      - adp-masters
+      - adp-orders
+      - adp-statemachine
+      - adp-users
+
+  - name: rollbackType
+    displayName: "Rollback Type"
+    type: string
+    default: "Previous version (1 step back)"
+    values:
+      - "Previous version (1 step back)"
+      - "Specific image tag"
+
+  - name: specificTag
+    displayName: "Specific Image Tag (BuildId) — only if Rollback Type = Specific"
+    type: string
+    default: ""
+
+variables:
+  ACR_NAME: adpgampuatuaencr
+  PROD_SUBSCRIPTION: "a43e6b1a-8f8d-43f4-85e5-85478689e4ba"
+  PROD_RESOURCE_GROUP: "az-emb-pr-uaen-automarketplace-aks-rg"
+  PROD_CLUSTER_NAME: "az-automotivemarketplace-pr-uaen-aks"
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+
+  # ── Step 1: Show current prod image versions ───────────────
+  - task: AzureCLI@2
+    displayName: 'Show current Production image versions'
+    inputs:
+      azureSubscription: 'subs-adports-prod (0a249c66-024e-4317-987f-edb5c27bd6dc)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription $(PROD_SUBSCRIPTION)
+        echo "=========================================="
+        echo "  CURRENT PRODUCTION IMAGE VERSIONS"
+        echo "=========================================="
+        az aks command invoke \
+          --resource-group $(PROD_RESOURCE_GROUP) \
+          --name $(PROD_CLUSTER_NAME) \
+          --command "
+            for SVC in adp-actions adp-analytics adp-authentication \
+              adp-chat adp-cms adp-communication adp-configuration \
+              adp-discovery adp-enquiry adp-frontend adp-inventory \
+              adp-masters adp-orders adp-statemachine adp-users; do
+              IMAGE=\$(kubectl get deployment \$SVC -n adp \
+                -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null \
+                || echo 'not-deployed')
+              echo \"\$SVC  →  \$IMAGE\"
+            done
+          "
+        echo "=========================================="
+        echo "  ROLLBACK REQUEST"
+        echo "  Service : ${{ parameters.serviceName }}"
+        echo "  Type    : ${{ parameters.rollbackType }}"
+        echo "  Tag     : ${{ parameters.specificTag }}"
+        echo "=========================================="
+
+  # ── Step 2: Approval Gate ──────────────────────────────────
+  - task: ManualValidation@0
+    displayName: 'Manual Approval — Confirm Production Rollback'
+    inputs:
+      notifyUsers: |
+        jasim.ahamed@adports.ae
+        waqar.azam@adports.ae
+      instructions: |
+        ⚠️ PRODUCTION ROLLBACK REQUESTED
+
+        Service : ${{ parameters.serviceName }}
+        Type    : ${{ parameters.rollbackType }}
+        Tag     : ${{ parameters.specificTag }}
+
+        Please review and approve to proceed with rollback.
+      onTimeout: 'reject'
+      timeout: '1440'  # 24 hours in minutes
+
+  # ── Step 3: Execute Rollback ───────────────────────────────
+  - task: AzureCLI@2
+    displayName: 'Execute Production Rollback'
+    inputs:
+      azureSubscription: 'subs-adports-prod (0a249c66-024e-4317-987f-edb5c27bd6dc)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription $(PROD_SUBSCRIPTION)
+
+        ALL_SERVICES="adp-actions adp-analytics adp-authentication \
+          adp-chat adp-cms adp-communication adp-configuration \
+          adp-discovery adp-enquiry adp-frontend adp-inventory \
+          adp-masters adp-orders adp-statemachine adp-users"
+
+        rollback_single() {
+          local SVC=$1
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔄 Rolling back: $SVC"
+
+          if [ "${{ parameters.rollbackType }}" = "Specific image tag" ] && \
+             [ -n "${{ parameters.specificTag }}" ]; then
+            echo "→ Target tag: ${{ parameters.specificTag }}"
+            az aks command invoke \
+              --resource-group $(PROD_RESOURCE_GROUP) \
+              --name $(PROD_CLUSTER_NAME) \
+              --command "
+                kubectl set image deployment/$SVC \
+                  $SVC=$(ACR_NAME).azurecr.io/$SVC:${{ parameters.specificTag }} \
+                  -n adp && \
+                kubectl rollout status deployment/$SVC -n adp --timeout=180s && \
+                echo '✅ $SVC rolled back to tag: ${{ parameters.specificTag }}'
+              "
+          else
+            echo "→ Target: previous revision"
+            az aks command invoke \
+              --resource-group $(PROD_RESOURCE_GROUP) \
+              --name $(PROD_CLUSTER_NAME) \
+              --command "
+                kubectl rollout undo deployment/$SVC -n adp && \
+                kubectl rollout status deployment/$SVC -n adp --timeout=180s && \
+                echo '✅ $SVC rolled back to previous version'
+              "
+          fi
+        }
+
+        if [ "${{ parameters.serviceName }}" = "ALL" ]; then
+          echo "🔄 Rolling back ALL production services..."
+          for SVC in $ALL_SERVICES; do
+            rollback_single "$SVC"
+          done
+        else
+          rollback_single "${{ parameters.serviceName }}"
+        fi
+
+        echo ""
+        echo "✅ Rollback execution completed!"
+
+  # ── Step 4: Verify post-rollback health ───────────────────
+  - task: AzureCLI@2
+    displayName: 'Verify Production Health After Rollback'
+    inputs:
+      azureSubscription: 'subs-adports-prod (0a249c66-024e-4317-987f-edb5c27bd6dc)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription $(PROD_SUBSCRIPTION)
+
+        echo "=========================================="
+        echo "  POST-ROLLBACK POD STATUS"
+        echo "=========================================="
+        az aks command invoke \
+          --resource-group $(PROD_RESOURCE_GROUP) \
+          --name $(PROD_CLUSTER_NAME) \
+          --command "kubectl get pods -n adp -o wide"
+
+        echo ""
+        echo "=========================================="
+        echo "  POST-ROLLBACK IMAGE VERSIONS"
+        echo "=========================================="
+        az aks command invoke \
+          --resource-group $(PROD_RESOURCE_GROUP) \
+          --name $(PROD_CLUSTER_NAME) \
+          --command "
+            for SVC in adp-actions adp-analytics adp-authentication \
+              adp-chat adp-cms adp-communication adp-configuration \
+              adp-discovery adp-enquiry adp-frontend adp-inventory \
+              adp-masters adp-orders adp-statemachine adp-users; do
+              IMAGE=\$(kubectl get deployment \$SVC -n adp \
+                -o jsonpath='{.spec.template.spec.containers[0].image}' \
+                2>/dev/null || echo 'not-deployed')
+              STATUS=\$(kubectl get pods -n adp -l app=\$SVC \
+                --no-headers 2>/dev/null | awk '{print \$3}' | head -1)
+              echo \"\$SVC  →  \$IMAGE  [\$STATUS]\"
+            done
+          "
+
+        echo ""
+        echo "Checking for unhealthy pods..."
+        az aks command invoke \
+          --resource-group $(PROD_RESOURCE_GROUP) \
+          --name $(PROD_CLUSTER_NAME) \
+          --command "
+            FAILED=\$(kubectl get pods -n adp --no-headers 2>/dev/null | \
+              grep -v Completed | \
+              grep -cE 'CrashLoopBackOff|Error|OOMKilled' || true)
+            if [ \"\$FAILED\" -gt '0' ]; then
+              echo \"⚠️  WARNING: \$FAILED pod(s) still unhealthy after rollback\"
+              kubectl get pods -n adp | grep -E 'CrashLoopBackOff|Error|OOMKilled'
+              exit 1
+            fi
+            echo '✅ All pods healthy after rollback!'
+          "

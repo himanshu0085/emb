@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adp-authentication
+  namespace: adp
+  labels:
+    app: adp-authentication
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: adp-authentication
+  template:
+    metadata:
+      labels:
+        app: adp-authentication
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      containers:
+        - name: adp-authentication
+          image: adpgamppruaencr.azurecr.io/adp-authentication:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: JAVA_OPTS
+              value: "-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseContainerSupport"
+            - name: SPRING_AUTOCONFIGURE_EXCLUDE
+              value: "org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration,org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration"
+            - name: SPRING_MAIN_LAZY_INITIALIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_MAIN_LAZY_INITIALIZATION
+            - name: SPRING_PROFILES_ACTIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_PROFILES_ACTIVE
+            - name: EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: EUREKA_URL
+            - name: SPRING_DATA_REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_HOST
+            - name: SPRING_DATA_REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_PORT
+            - name: SPRING_DATA_REDIS_SSL
+              value: "true"
+            - name: SPRING_DATA_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: REDIS_PASSWORD
+            - name: SECURITY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: JWT_SECRET
+            - name: APP_CORS_ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: APP_CORS_ALLOWED_ORIGINS
+            - name: ADP_RATELIMIT_ENABLED
+              value: "false"
+            - name: AUTH_SKIP_URLPATTERNS
+              value: "/users/api/v1/users/send-otp,/users/api/v1/users/verify-otp,/users/api/v1/users/forgot/reset-password,/users/api/v1/users/v2/create,/inventory/api/v1/inventory/list,/inventory/api/v1/inventory/search,/inventory/api/v1/inventory/getInventoryById,/inventory/api/v1/inventory/getInventoryDetails,/users/api/v1/users/upload,/inventory/api/v1/inventory/getInventorySellerDealerInfo,/inventory/api/v1/inventory/inventoryListForUser,/inventory/api/v1/inventory/addCart,/inventory/api/v1/inventory/fuzzy-search,/inventory/api/v1/inventory/increment-views,/inventory/api/v1/inventory/groupingListing,/masters/"
+            - name: SPRING_CONFIG_USE_LEGACY_PROCESSING
+              value: "true"
+            - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+              value: "true"
+            - name: USERS_SERVICE_URL
+              value: "http://adp-users-service:8087"
+            - name: RECAPTCHA_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: RECAPTCHA_SECRET_KEY
+            - name: COOKIE_DOMAIN
+              value: "globalautotrade.com"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "768Mi"
+              cpu: "500m"
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adp-authentication
+  namespace: adp
+spec:
+  type: NodePort
+  selector:
+    app: adp-authentication
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080

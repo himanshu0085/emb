@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adp-inventory
+  namespace: adp
+  labels:
+    app: adp-inventory
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: adp-inventory
+  template:
+    metadata:
+      labels:
+        app: adp-inventory
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      containers:
+        - name: adp-inventory
+          image: adpgamppruaencr.azurecr.io/adp-inventory:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8084
+          env:
+            - name: SPRING_AUTOCONFIGURE_EXCLUDE
+              value: "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration"
+            - name: JAVA_OPTS
+              value: "-Xms256m -Xmx512m"
+            - name: SPRING_MAIN_LAZY_INITIALIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_MAIN_LAZY_INITIALIZATION
+            - name: SPRING_PROFILES_ACTIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_PROFILES_ACTIVE
+            - name: EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: EUREKA_URL
+            - name: SPRING_DATA_MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: MONGODB_URI
+            - name: SPRING_DATA_MONGODB_DATABASE
+              value: "adp_inventory"
+            - name: SPRING_ELASTICSEARCH_URIS
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: ELASTICSEARCH_URL
+            - name: SPRING_ELASTICSEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: ELASTICSEARCH_API_KEY
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_HOST
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: REDIS_PORT
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: REDIS_PASSWORD
+            - name: REDIS_SSL
+              value: "true"
+            - name: SECURITY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: JWT_SECRET
+            # Azure Service Bus — injected from secret (replaces hardcoded value in application.properties)
+            - name: AZURE_SERVICEBUS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: AZURE_SERVICEBUS_INVENTORY
+            - name: AZURE_SERVICEBUS_QUEUE_NAME
+              value: "adp-inventory"
+            - name: ELASTICSEARCH_CHANGE_STREAM_ENABLED
+              value: "true"
+            # Spring Boot 2.4+ legacy processing — required for profile-specific properties
+            - name: SPRING_CONFIG_USE_LEGACY_PROCESSING
+              value: "true"
+            # Prevent Eureka registering pod names (gateway cannot resolve them)
+            - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+              value: "true"
+            # Direct k8s DNS — bypasses Eureka (avoids 1-2s latency per call)
+            - name: USERS_SERVICE_URL
+              value: "http://adp-users-service:8087"
+            - name: CHAT_SERVICE_URL
+              value: "http://adp-chat-service:8090"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1024Mi"
+              cpu: "500m"
+          readinessProbe:
+            tcpSocket:
+              port: 8084
+            initialDelaySeconds: 90
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8084
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adp-inventory-service
+  namespace: adp
+spec:
+  selector:
+    app: adp-inventory
+  ports:
+    - port: 8084
+      targetPort: 8084

@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adp-analytics
+  namespace: adp
+  labels:
+    app: adp-analytics
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: adp-analytics
+  template:
+    metadata:
+      labels:
+        app: adp-analytics
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      containers:
+        - name: adp-analytics
+          image: adpgamppruaencr.azurecr.io/adp-analytics:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8089
+          env:
+            - name: SPRING_MAIN_LAZY_INITIALIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_MAIN_LAZY_INITIALIZATION
+            - name: SPRING_PROFILES_ACTIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_PROFILES_ACTIVE
+            - name: EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: EUREKA_URL
+            - name: SPRING_ELASTICSEARCH_URIS
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: ELASTICSEARCH_URL
+            - name: SPRING_ELASTICSEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: ELASTICSEARCH_API_KEY
+            - name: SECURITY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: adp-secrets
+                  key: JWT_SECRET
+            - name: SPRING_CONFIG_USE_LEGACY_PROCESSING
+              value: "true"
+            - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+              value: "true"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "768Mi"
+              cpu: "500m"
+          readinessProbe:
+            tcpSocket:
+              port: 8089
+            initialDelaySeconds: 90
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8089
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adp-analytics-service
+  namespace: adp
+spec:
+  selector:
+    app: adp-analytics
+  ports:
+    - port: 8089
+      targetPort: 8089

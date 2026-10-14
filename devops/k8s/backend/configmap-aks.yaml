@@ -1,0 +1,68 @@
+# ============================================================
+#  ADP Platform – ConfigMap for Azure AKS
+#  Updated to match live cluster state — May 2026
+#
+#  Apply with:
+#    kubectl apply -f k8s/backend/configmap-aks.yaml
+#
+#  SECURITY NOTE: JWT_SECRET and REDIS_PASSWORD have been moved
+#  to adp-secrets (Kubernetes Secret) as part of VAPT fixes.
+#  All deployments now reference them via secretKeyRef.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adp-backend-config
+  namespace: adp
+data:
+  SPRING_PROFILES_ACTIVE: "prod"
+
+  # Fix for Spring Boot 2.4+ breaking change
+  SPRING_CONFIG_USE_LEGACY_PROCESSING: "true"
+
+  # Eureka – stays in-cluster
+  EUREKA_URL: "http://adp-discovery:8761/eureka/"
+
+  # Lazy init workaround
+  SPRING_MAIN_LAZY_INITIALIZATION: "true"
+
+  # ── Frontend (runtime) ───────────────────────────────────────
+  INTERNAL_API_DOMAIN: "http://adp-authentication:8080"
+
+  # ── MongoDB ──────────────────────────────────────────────────
+  MONGODB_HOST: "REPLACE_WITH_MONGODB_CLUSTER"
+  MONGODB_PORT: "27017"
+
+  # ── Azure Cache for Redis ────────────────────────────────────
+  REDIS_HOST: "az-amp-pr-uaen-redis.redis.cache.windows.net"
+  REDIS_PORT: "6380"
+  REDIS_SSL: "true"
+  # REDIS_PASSWORD removed — now stored in adp-secrets (secretKeyRef: REDIS_PASSWORD)
+
+  # ── Elasticsearch ───────────────────────────────────────────
+  ELASTICSEARCH_URL: "https://production-amp-elasticsearch-f50f42.es.uaenorth.azure.elastic.cloud:443"
+
+  # ── JWT — moved to adp-secrets (secretKeyRef: JWT_SECRET) ───
+  # JWT_SECRET removed from ConfigMap — stored in Kubernetes Secret adp-secrets
+
+  # ── Azure Service Bus ────────────────────────────────────────
+  SERVICEBUS_TOPIC: "notifications"
+  SERVICEBUS_SUBSCRIPTION_EMAIL: "EmailService"
+  SERVICEBUS_SUBSCRIPTION_SMS: "SMSService"
+  SERVICEBUS_INVENTORY_QUEUE: "queue"
+
+  # ── CORS ──────────────────────────────────────────────────────
+  APP_CORS_ALLOWED_ORIGINS: "https://stg.globalautotrade.com"
+  CMS_CORS_ALLOWED_ORIGINS: "https://stg.globalautotrade.com"
+
+  # ── OTP ───────────────────────────────────────────────────────
+  OTP_SEND_EMAIL: "true"
+
+  # ── Azure Blob Storage ───────────────────────────────────────
+  AZURE_STORAGE_UPLOAD_FOLDER: "User-Documents"
+
+  # ── Gateway Routes ───────────────────────────────────────────
+  # NOTE: Routes for users, masters, inventory, chat, orders, etc.
+  # are defined in GatewayConfig.java in the source code.
+  # Do NOT add routes here — they will conflict with GatewayConfig.java.
+  # Do NOT add any route for /api/v1/auth/** — handled by AuthController locally.

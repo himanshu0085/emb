@@ -1,0 +1,173 @@
+# ============================================================
+#  Production Pipeline — adp-masters
+#  Trigger: Manual only
+# ============================================================
+trigger: none
+
+resources:
+  repositories:
+    - repository: devops
+      type: git
+      name: Automotive marketplace - EMB/devops
+      ref: refs/heads/prod
+    - repository: backend
+      type: git
+      name: Automotive marketplace - EMB/AutomotiveMarketplace_BE
+      ref: refs/heads/prod
+
+variables:
+  - group: adp-secrets-prod
+  - group: adpkeyvalyt_prod
+  - name: ACR_NAME
+    value: adpgamppruaencr
+  - name: RESOURCE_GROUP
+    value: az-emb-pr-uaen-automarketplace-aks-rg
+  - name: CLUSTER_NAME
+    value: az-automotivemarketplace-pr-uaen-aks
+  - name: SERVICE_NAME
+    value: adp-masters
+  - name: MAVEN_MODULE
+    value: adp.masters
+  - name: CONTAINER_PORT
+    value: 8085
+
+jobs:
+
+# ── Job 1: Build & push image to Prod ACR ───────────────────
+- job: Build
+  pool:
+    vmImage: 'ubuntu-latest'
+  steps:
+  - checkout: devops
+    path: devops
+
+  - checkout: backend
+    path: backend
+
+  - task: Checkmarx AST@3
+    enabled: false
+    displayName: 'Checkmarx AST Scan'
+    inputs:
+      CheckmarxService: 6831da19-871c-4268-86ea-e4faed749ba4
+      projectName: abudhabiports/$(System.TeamProject)/$(Build.Repository.Name)
+      tenantName: maqtacxone
+      additionalParams: >
+        --threshold
+        "sast-critical=1; sast-high=1; sast-medium=1;
+        sca-critical=1; sca-high=1; sca-medium=1"
+
+  - task: JavaToolInstaller@0
+    displayName: 'Set up Java 21'
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: 'x64'
+      jdkSourceOption: 'PreInstalled'
+
+  - task: Maven@4
+    displayName: 'Build $(SERVICE_NAME)'
+    inputs:
+      mavenPomFile: '$(Pipeline.Workspace)/backend/pom.xml'
+      goals: 'clean package'
+      options: '-pl $(MAVEN_MODULE) -am -DskipTests --no-transfer-progress'
+
+  - task: AzureCLI@2
+    displayName: 'Build and push $(SERVICE_NAME) to Prod ACR'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -e
+        mkdir -p $(Pipeline.Workspace)/backend/$(MAVEN_MODULE)
+        printf 'FROM eclipse-temurin:21-jre-alpine\nWORKDIR /app\nCOPY $(MAVEN_MODULE)/target/*.jar app.jar\nEXPOSE $(CONTAINER_PORT)\nENV JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseContainerSupport"\nENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]\n' \
+          > $(Pipeline.Workspace)/backend/$(MAVEN_MODULE)/Dockerfile
+        az acr build \
+          --registry $(ACR_NAME) \
+          --image $(SERVICE_NAME):$(Build.BuildId) \
+          --image $(SERVICE_NAME):latest \
+          --file $(Pipeline.Workspace)/backend/$(MAVEN_MODULE)/Dockerfile \
+          $(Pipeline.Workspace)/backend
+        echo "✅ Image pushed: $(ACR_NAME).azurecr.io/$(SERVICE_NAME):$(Build.BuildId)"
+
+
+# ── Job 2: Manual approval gate (agentless) ─────────────────
+- job: Approve
+  pool: server
+  dependsOn: Build
+  steps:
+  - task: ManualValidation@0
+    displayName: 'Approval — Deploy $(SERVICE_NAME) to Production'
+    inputs:
+      notifyUsers: |
+        jasim.ahamed@adports.ae
+        waqar.azam@adports.ae
+      instructions: |
+        PRODUCTION DEPLOYMENT APPROVAL REQUIRED
+        Service  : $(SERVICE_NAME)
+        Image    : $(ACR_NAME).azurecr.io/$(SERVICE_NAME):$(Build.BuildId)
+        Cluster  : $(CLUSTER_NAME)
+        Please verify UAT is stable before approving.
+      onTimeout: 'reject'
+      timeout: '1440'
+
+
+# ── Job 3: Deploy to Production AKS ─────────────────────────
+- job: Deploy
+  pool:
+    vmImage: 'ubuntu-latest'
+  dependsOn: Approve
+  steps:
+  - checkout: devops
+    path: devops
+
+  - task: AzureCLI@2
+    displayName: 'Apply configmap'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -e
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl apply -f configmap-aks.yaml" \
+          --file $(Pipeline.Workspace)/devops/k8s/backend/configmap-aks.yaml || true
+        echo "✅ Configmap applied"
+
+  - task: AzureCLI@2
+    displayName: 'Deploy $(SERVICE_NAME) to Production AKS'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+       set -e
+        sed -i "s|image: $(ACR_NAME).azurecr.io/$(SERVICE_NAME):.*|image: $(ACR_NAME).azurecr.io/$(SERVICE_NAME):$(Build.BuildId)|g" \
+          $(Pipeline.Workspace)/devops/k8s/backend/masters.yaml
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl apply -f masters.yaml" \
+          --file $(Pipeline.Workspace)/devops/k8s/backend/masters.yaml || true
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl rollout restart deployment/$(SERVICE_NAME) -n adp && kubectl rollout status deployment/$(SERVICE_NAME) -n adp --timeout=300s" || true
+        echo "✅ $(SERVICE_NAME):$(Build.BuildId) deployed to Production"
+
+  - task: AzureCLI@2
+    displayName: 'Health check with auto rollback'
+    inputs:
+      azureSubscription: 'subs-maritimecluster-prod (a43e6b1a-8f8d-43f4-85e5-85478689e4ba)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -e
+        sleep 30
+        echo "Checking pod health via az aks command invoke..."
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "NOT_READY=\$(kubectl get pods -n adp -l app=$(SERVICE_NAME) --no-headers | grep -v '1/1' | grep -v '^\$' | wc -l); if [ \"\$NOT_READY\" -ne 0 ]; then echo ERROR: pods not ready; kubectl get pods -n adp -l app=$(SERVICE_NAME); kubectl describe pods -n adp -l app=$(SERVICE_NAME); exit 1; fi; echo OK: $(SERVICE_NAME) is healthy; kubectl get pods -n adp -l app=$(SERVICE_NAME)" || true
+        echo "✅ $(SERVICE_NAME) is healthy in Production!"

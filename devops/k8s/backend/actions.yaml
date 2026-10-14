@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adp-actions
+  namespace: adp
+  labels:
+    app: adp-actions
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: adp-actions
+  template:
+    metadata:
+      labels:
+        app: adp-actions
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      containers:
+        - name: adp-actions
+          image: adpgamppruaencr.azurecr.io/adp-actions:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          env:
+            - name: SPRING_MAIN_LAZY_INITIALIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: SPRING_MAIN_LAZY_INITIALIZATION
+            - name: EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE
+              valueFrom:
+                configMapKeyRef:
+                  name: adp-backend-config
+                  key: EUREKA_URL
+            - name: SPRING_CONFIG_USE_LEGACY_PROCESSING
+              value: "true"
+            - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+              value: "true"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "768Mi"
+              cpu: "500m"
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 90
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: actions
+  namespace: adp
+spec:
+  selector:
+    app: adp-actions
+  ports:
+    - port: 8081
+      targetPort: 8081

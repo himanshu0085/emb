@@ -1,0 +1,29 @@
+# ============================================================
+#  ADP Platform – Let's Encrypt ClusterIssuer
+#  PRODUCTION environment
+#
+#  Prerequisites:
+#    1. cert-manager installed:
+#       kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+#
+#  Apply with:
+#    az aks command invoke \
+#      --resource-group az-emb-pr-uaen-automarketplace-aks-rg \
+#      --name az-automotivemarketplace-pr-uaen-aks \
+#      --command "kubectl apply -f letsencrypt-prod.yaml" \
+#      --file k8s/Prod/letsencrypt-prod.yaml
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: waqar.azam@adports.ae
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+      - http01:
+          ingress:
+            class: azure-application-gateway

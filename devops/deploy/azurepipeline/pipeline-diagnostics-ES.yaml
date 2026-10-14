@@ -1,0 +1,75 @@
+# ============================================================
+#  ADP Platform – Diagnostics & Fix Pipeline
+#  PRODUCTION environment
+#
+#  Use to patch individual secrets and restart specific
+#  services without full redeployment.
+#
+#  Trigger: Manual only
+# ============================================================
+trigger: none
+
+variables:
+  - group: adp-secrets-prod
+  - group: AzureKey_Valut_PROD
+  - name: RESOURCE_GROUP
+    value: az-emb-pr-uaen-automarketplace-aks-rg
+  - name: CLUSTER_NAME
+    value: az-automotivemarketplace-pr-uaen-aks
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+
+  - task: AzureCLI@2
+    displayName: 'Patch ELASTICSEARCH_API_KEY + restart inventory'
+    inputs:
+      azureSubscription: 'subs-adports-prod (0a249c66-024e-4317-987f-edb5c27bd6dc)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "
+            kubectl patch secret adp-secrets -n adp \
+              -p '{\"stringData\":{\"ELASTICSEARCH_API_KEY\":\"$(ELASTICSEARCH_API_KEY)\"}}' && \
+            echo 'Secret patched OK' && \
+            kubectl rollout restart deployment/adp-inventory -n adp && \
+            kubectl rollout restart deployment/adp-analytics -n adp && \
+            echo 'Services restarted'
+          "
+
+  - task: Bash@3
+    displayName: 'Wait 3 minutes for startup'
+    inputs:
+      targetType: inline
+      script: sleep 180
+
+  - task: AzureCLI@2
+    displayName: 'Check pod status'
+    inputs:
+      azureSubscription: 'subs-adports-prod (0a249c66-024e-4317-987f-edb5c27bd6dc)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl get pods -n adp | grep -E 'adp-inventory|adp-analytics'"
+
+  - task: AzureCLI@2
+    displayName: 'Check inventory logs'
+    inputs:
+      azureSubscription: 'subs-adports-prod (0a249c66-024e-4317-987f-edb5c27bd6dc)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az account set --subscription a43e6b1a-8f8d-43f4-85e5-85478689e4ba
+        az aks command invoke \
+          --resource-group $(RESOURCE_GROUP) \
+          --name $(CLUSTER_NAME) \
+          --command "kubectl logs -l app=adp-inventory -n adp --tail=50 2>&1"
