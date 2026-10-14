@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: adp-backend-config
-  namespace: adp-preprod
+  namespace: adp-preprod-preprod
 data:
   SPRING_PROFILES_ACTIVE: "dev"
   EUREKA_URL: "http://adp-discovery:8761/eureka/"
