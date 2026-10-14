@@ -1,42 +1,34 @@
 # `prod-v1` branch — pre-production namespace change analysis
 
 ## Goal
-Use Kubernetes namespace `adp-preprod` for isolated validation while preserving the existing live namespace `adp` and `www.globalautotrade.com` until an approved cutover.
+Use Kubernetes namespace `adp-preprod` and temporary hostname `prod.globalautotrade.com` for validation while preserving live namespace `adp` and live hostname `www.globalautotrade.com`.
 
-## Repository findings checked
+## Changes made on this branch
 
-- `k8s/namespace.yaml` currently defines `adp`.
-- `k8s/backend/configmap-aks.yaml` uses production profile and a production Elasticsearch endpoint; Redis and other dependencies need explicit isolation checks.
-- `k8s/backend/secrets.yaml` contains credential-like values and a hard-coded default password. Treat them as exposed until verified; rotate any real credentials and remove secrets from version control/history through the approved process.
-- `k8s/backend/configmap.yaml` contains development settings and a JWT-like value; it must not be treated as a production-ready preprod configuration.
-- `k8s/frontend/frontend.yaml` targets namespace `adp`, uses `:latest`, and points API/WebSocket traffic at `www.globalautotrade.com`.
-- `k8s/ingress.yaml` targets namespace `adp` and host `www.globalautotrade.com`; it must not be reused unchanged for preprod.
-- `deploy/azurepipeline/inject-secrets.yaml` targets namespace `adp`, uses the production variable group/service connection and restarts live deployments. Do not run it for preprod.
-- The sampled service pipelines (`pipeline-frontend.yaml`, `pipeline-actions.yaml`, `pipeline-chat.yaml`, `pipeline-orders.yaml`, `pipeline-analytics.yaml`) use `refs/heads/prod` and production variable groups/registry/cluster values. Create separate preprod pipeline definitions rather than editing these production pipelines in place.
-- A deployment manifest named `k8s/backend/deployment.yaml` was not found at that path; inspect the actual per-service manifests before creating a complete overlay.
+- Updated `k8s/namespace.yaml` to define `adp-preprod`.
+- Updated namespace fields in backend ConfigMaps, frontend Deployment/Service, ingress manifests and NetworkPolicies to `adp-preprod`.
+- Updated frontend API/WebSocket URLs and ingress host rules to `prod.globalautotrade.com`.
+- Updated the CORS origins in `configmap-aks.yaml` to `https://prod.globalautotrade.com`.
+- Updated explicit namespace flags in the sampled service pipelines to `adp-preprod`.
+- Added `k8s/preprod/secrets.template.yaml` with placeholders only.
+- Added `deploy/azurepipeline/inject-secrets-preprod.yaml`, which expects a separate `adp-secrets-preprod` variable group.
+- Added `k8s/preprod/README.md` with deployment prerequisites.
 
-## Changes made in this branch
+## Intentionally not globally renamed
 
-1. Added `k8s/preprod/namespace.yaml` defining namespace `adp-preprod` with environment labels.
-2. Added `k8s/preprod/README.md` documenting deployment blockers, isolation requirements, and safe next steps.
-3. Added this analysis document.
+Service names such as `adp-authentication`, `adp-frontend`, resource names, Azure variable group names, and application identifiers were not blindly renamed: these are not Kubernetes namespace values and may be referenced by application routing. Namespace references were changed instead.
 
-## Not changed intentionally
+The original `deploy/azurepipeline/inject-secrets.yaml` and `deploy/azurepipeline/rollback-prod.yml` remain production-oriented and must not be used for preprod. The original `k8s/backend/secrets.yaml` remains unchanged; it contains credential-like values and targets namespace `adp`. Do not apply it to preprod. Use the placeholder template and an approved preprod secret store.
 
-- Existing `k8s/namespace.yaml` and resources in namespace `adp`.
-- Existing production ingress/hostname.
-- Existing production pipeline definitions and variable groups.
-- Secret-bearing manifests and production dependency endpoints.
+## Remaining deployment blockers
 
-## Outstanding inputs / blockers
-
-- Approved preprod hostname and certificate/TLS ownership.
-- Approved preprod variable group/Key Vault scope and Azure DevOps service connection.
-- Whether preprod has its own ACR or may use the existing registry with separate immutable tags and permissions.
-- Isolated database, Redis, Elasticsearch, Service Bus and Blob Storage resources/identities.
-- Exact source branch policy for application repositories and confirmation that `prod-v1` is the approved source branch (branch and namespace are separate names).
-- Full inventory of per-service Kubernetes manifests and pipeline files, followed by YAML validation, secret scanning, and a reviewed PR.
+- Confirm DNS record and TLS certificate coverage/ownership for `prod.globalautotrade.com`.
+- Confirm that the `adp-secrets-preprod` Azure DevOps variable group exists and contains only preprod credentials.
+- Current pipelines still contain production variable groups, ACR, and AKS service connection values unless separately overridden; verify access and approve a preprod-specific pipeline before running.
+- `configmap-aks.yaml` still has production Elasticsearch/Redis endpoints and must be pointed at isolated resources before deploying. Database, Service Bus and Blob Storage isolation also needs confirmation.
+- The frontend pipeline still uses the existing image tag strategy; pin an immutable preprod image tag/digest before deployment.
+- Validate cookie domain, auth callback URLs, CORS, WebSocket routing, TLS, ingress controller behavior, YAML schemas and secret scanning.
 
 ## Execution status
 
-No AKS commands were run and no cluster resources were created. The `adp-preprod` namespace manifest is committed only to this Git branch; it must be reviewed and explicitly applied by an authorized operator after the blockers above are resolved.
+Only GitHub branch files were changed. No AKS commands were run, no namespace was created in the cluster, and no DNS/TLS changes were made. Review the branch diff before running any pipeline.
