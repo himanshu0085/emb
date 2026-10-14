@@ -23,7 +23,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl apply -f ingress-private.yaml -n adp" \
+          --command "kubectl apply -f ingress-private.yaml -n adp-preprod" \
           --file k8s/ingress-private.yaml
 
   - task: AzureCLI@2
@@ -40,9 +40,9 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl get ingress adp-ingress-private -n adp -o jsonpath='{range .spec.rules[*]}{range .http.paths[*]}{\"  \"}{.path}{\" -> \"}{.backend.service.name}{\"\\n\"}{end}{end}'"
+          --command "kubectl get ingress adp-ingress-private -n adp-preprod -o jsonpath='{range .spec.rules[*]}{range .http.paths[*]}{\"  \"}{.path}{\" -> \"}{.backend.service.name}{\"\\n\"}{end}{end}'"
         echo "=== Probe /chat/api/negotiations/initiate via private ingress ==="
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl run curl-test --image=curlimages/curl --restart=Never --rm -i -n adp -- curl -sk -X POST -H 'Host: stg.globalautotrade.com' https://10.68.133.6/chat/api/negotiations/initiate -o /dev/null -w 'HTTP Status: %{http_code}' 2>&1 || true"
+          --command "kubectl run curl-test --image=curlimages/curl --restart=Never --rm -i -n adp-preprod -- curl -sk -X POST -H 'Host: stg.globalautotrade.com' https://10.68.133.6/chat/api/negotiations/initiate -o /dev/null -w 'HTTP Status: %{http_code}' 2>&1 || true"
