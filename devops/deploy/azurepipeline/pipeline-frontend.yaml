@@ -566,7 +566,7 @@ jobs:
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl annotate ingress adp-ingress -n adp appgw.ingress.kubernetes.io/health-probe-path='/favicon.ico' appgw.ingress.kubernetes.io/health-probe-status-codes='200-499' --overwrite" || true
+            --command "kubectl annotate ingress adp-ingress -n adp-preprod appgw.ingress.kubernetes.io/health-probe-path='/favicon.ico' appgw.ingress.kubernetes.io/health-probe-status-codes='200-499' --overwrite" || true
           # Fix: WebSocket/STOMP sticky sessions via Azure AppGateway cookie affinity.
           # Root cause: adp-chat uses an in-memory STOMP broker (stompBrokerRelay=null confirmed
           # in logs). With multiple chat pods, buyer/seller can land on different pods — the
@@ -577,12 +577,12 @@ jobs:
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl annotate ingress adp-ingress -n adp appgw.ingress.kubernetes.io/cookie-based-affinity='true' --overwrite" || true
+            --command "kubectl annotate ingress adp-ingress -n adp-preprod appgw.ingress.kubernetes.io/cookie-based-affinity='true' --overwrite" || true
           echo "=== Ingress annotations after sticky-session patch ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get ingress adp-ingress -n adp -o jsonpath='{.metadata.annotations}' 2>&1" || true
+            --command "kubectl get ingress adp-ingress -n adp-preprod -o jsonpath='{.metadata.annotations}' 2>&1" || true
           # Inject INTERNAL_API_DOMAIN so Next.js server-side calls hit the internal K8s service
           # (adp-authentication at port 8080) instead of looping through the public Application
           # Gateway (hairpin NAT fix). This eliminates server load from hairpin timeouts which
@@ -590,15 +590,15 @@ jobs:
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl set env deployment/adp-frontend -n adp INTERNAL_API_DOMAIN=$(INTERNAL_API_DOMAIN)" || true
+            --command "kubectl set env deployment/adp-frontend -n adp-preprod INTERNAL_API_DOMAIN=$(INTERNAL_API_DOMAIN)" || true
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl rollout restart deployment/adp-frontend -n adp" || true
+            --command "kubectl rollout restart deployment/adp-frontend -n adp-preprod" || true
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl rollout status deployment/adp-frontend -n adp --timeout=180s" || true
+            --command "kubectl rollout status deployment/adp-frontend -n adp-preprod --timeout=180s" || true
           echo "✅ adp-frontend:$(Build.BuildId) deployed to Production"
 
     - task: AzureCLI@2
@@ -612,24 +612,24 @@ jobs:
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get pods -n adp --show-labels | grep -i chat" || true
+            --command "kubectl get pods -n adp-preprod --show-labels | grep -i chat" || true
           echo "=== Current allow-only-gateway-to-inventory NetworkPolicy ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get networkpolicy allow-only-gateway-to-inventory -n adp -o yaml" || true
+            --command "kubectl get networkpolicy allow-only-gateway-to-inventory -n adp-preprod -o yaml" || true
           echo "=== Patching NetworkPolicy: add adp-chat ingress rule ==="
           # The chat service pod label is assumed to be app=adp-chat (follows the naming convention).
           # If the label differs (check logs above), update matchLabels accordingly.
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl patch networkpolicy allow-only-gateway-to-inventory -n adp --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/ingress/-\",\"value\":{\"from\":[{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-chat\"}}}]}}]'" || true
+            --command "kubectl patch networkpolicy allow-only-gateway-to-inventory -n adp-preprod --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/ingress/-\",\"value\":{\"from\":[{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-chat\"}}}]}}]'" || true
           echo "=== Updated NetworkPolicy (verify adp-chat rule present) ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get networkpolicy allow-only-gateway-to-inventory -n adp -o yaml" || true
+            --command "kubectl get networkpolicy allow-only-gateway-to-inventory -n adp-preprod -o yaml" || true
 
     - task: AzureCLI@2
       displayName: '[Fix] NetworkPolicy — allow chat service to call all microservices (negotiation items empty)'
@@ -649,19 +649,19 @@ jobs:
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get svc -n adp -o custom-columns=NAME:.metadata.name,PORT:.spec.ports[0].port --no-headers 2>&1" || true
+            --command "kubectl get svc -n adp-preprod -o custom-columns=NAME:.metadata.name,PORT:.spec.ports[0].port --no-headers 2>&1" || true
           echo "=== Patching NetworkPolicies to allow adp-chat ingress ==="
           for NP in allow-only-gateway-to-masters allow-only-gateway-to-orders allow-only-gateway-to-users allow-only-gateway-to-analytics; do
             az aks command invoke \
               --resource-group $(RESOURCE_GROUP) \
               --name $(CLUSTER_NAME) \
-              --command "kubectl get networkpolicy $NP -n adp -o jsonpath='{.spec.ingress}' 2>&1 | grep -q adp-chat && echo $NP-already-patched || (kubectl patch networkpolicy $NP -n adp --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/ingress/-\",\"value\":{\"from\":[{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-chat\"}}}]}}]' && echo $NP-patched)" || true
+              --command "kubectl get networkpolicy $NP -n adp-preprod -o jsonpath='{.spec.ingress}' 2>&1 | grep -q adp-chat && echo $NP-already-patched || (kubectl patch networkpolicy $NP -n adp-preprod --type=json -p='[{\"op\":\"add\",\"path\":\"/spec/ingress/-\",\"value\":{\"from\":[{\"podSelector\":{\"matchLabels\":{\"app\":\"adp-chat\"}}}]}}]' && echo $NP-patched)" || true
           done
           echo "=== Verify: all NetworkPolicies now include adp-chat ingress ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get networkpolicy -n adp -o json 2>&1 | grep -B2 adp-chat" || true
+            --command "kubectl get networkpolicy -n adp-preprod -o json 2>&1 | grep -B2 adp-chat" || true
 
     - task: AzureCLI@2
       displayName: 'Health check with auto rollback'
@@ -676,7 +676,7 @@ jobs:
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "NOT_READY=\$(kubectl get pods -n adp -l app=$(SERVICE_NAME) --no-headers | grep -v '1/1' | grep -v '^\$' | wc -l); if [ \"\$NOT_READY\" -ne 0 ]; then echo ERROR: pods not ready; kubectl get pods -n adp -l app=$(SERVICE_NAME); kubectl describe pods -n adp -l app=$(SERVICE_NAME); exit 1; fi; echo OK: $(SERVICE_NAME) is healthy; kubectl get pods -n adp -l app=$(SERVICE_NAME)" || true
+            --command "NOT_READY=\$(kubectl get pods -n adp-preprod -l app=$(SERVICE_NAME) --no-headers | grep -v '1/1' | grep -v '^\$' | wc -l); if [ \"\$NOT_READY\" -ne 0 ]; then echo ERROR: pods not ready; kubectl get pods -n adp-preprod -l app=$(SERVICE_NAME); kubectl describe pods -n adp-preprod -l app=$(SERVICE_NAME); exit 1; fi; echo OK: $(SERVICE_NAME) is healthy; kubectl get pods -n adp-preprod -l app=$(SERVICE_NAME)" || true
           echo "✅ $(SERVICE_NAME) is healthy in Production!"
 
 # ── Job 4: Manual test gate (agentless) ─────────────────────
@@ -721,70 +721,70 @@ jobs:
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl logs -n adp -l app=adp-frontend --tail=600 2>&1 | grep -E 'vehicle-detail|VehicleListing|Error|TypeError|fetch failed|AbortError|statusCode|dashboard|Promise.race|timeout|negotiate|getUserInfo|my-negotiations|chat|transformAlgorithm' | tail -200" || true
+            --command "kubectl logs -n adp-preprod -l app=adp-frontend --tail=600 2>&1 | grep -E 'vehicle-detail|VehicleListing|Error|TypeError|fetch failed|AbortError|statusCode|dashboard|Promise.race|timeout|negotiate|getUserInfo|my-negotiations|chat|transformAlgorithm' | tail -200" || true
           echo "=== Chat service pod logs (last 100 lines) ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl logs -n adp -l app=adp-chat --tail=100 2>&1 | tail -100" || true
+            --command "kubectl logs -n adp-preprod -l app=adp-chat --tail=100 2>&1 | tail -100" || true
           echo "=== adp-chat pod count + node distribution (multi-pod = in-memory STOMP broken) ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get pods -n adp -l app=adp-chat -o wide 2>&1" || true
+            --command "kubectl get pods -n adp-preprod -l app=adp-chat -o wide 2>&1" || true
           echo "=== STOMP WebSocket stats from chat logs ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl logs -n adp -l app=adp-chat --tail=500 2>&1 | grep -E 'WebSocketSession|stompSubProtocol|stompBrokerRelay|CONNECT|SUBSCRIBE|SEND|DISCONNECT|ConnectTimeout|8087|users' | tail -50" || true
+            --command "kubectl logs -n adp-preprod -l app=adp-chat --tail=500 2>&1 | grep -E 'WebSocketSession|stompSubProtocol|stompBrokerRelay|CONNECT|SUBSCRIBE|SEND|DISCONNECT|ConnectTimeout|8087|users' | tail -50" || true
           echo "=== NetworkPolicy ingress rules — verify adp-chat is in users/masters/orders/analytics ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get networkpolicy allow-only-gateway-to-users allow-only-gateway-to-inventory -n adp -o json 2>&1 | grep -A3 'adp-chat\|matchLabels'" || true
+            --command "kubectl get networkpolicy allow-only-gateway-to-users allow-only-gateway-to-inventory -n adp-preprod -o json 2>&1 | grep -A3 'adp-chat\|matchLabels'" || true
           echo "=== INTERNAL_API_DOMAIN value ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get deployment adp-frontend -n adp -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INTERNAL_API_DOMAIN\")].value}'" || true
+            --command "kubectl get deployment adp-frontend -n adp-preprod -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"INTERNAL_API_DOMAIN\")].value}'" || true
           echo "=== adp-inventory-service full describe (selector + endpoints) ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl describe svc adp-inventory-service -n adp 2>&1" || true
+            --command "kubectl describe svc adp-inventory-service -n adp-preprod 2>&1" || true
           echo "=== adp-inventory-service endpoints (shows which pods are selected) ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get endpoints adp-inventory-service -n adp -o yaml 2>&1" || true
+            --command "kubectl get endpoints adp-inventory-service -n adp-preprod -o yaml 2>&1" || true
           echo "=== inventory pod labels ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get pod adp-inventory-654cfbbb64-7g698 -n adp -o jsonpath='{.metadata.labels}' 2>&1" || true
+            --command "kubectl get pod adp-inventory-654cfbbb64-7g698 -n adp-preprod -o jsonpath='{.metadata.labels}' 2>&1" || true
           echo "=== NetworkPolicies in adp namespace ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "kubectl get networkpolicy -n adp 2>&1" || true
+            --command "kubectl get networkpolicy -n adp-preprod 2>&1" || true
           # kubectl exec using jsonpath (no sed needed — az aks command invoke uses minimal sh)
           echo "=== Connectivity tests from frontend pod ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "POD=\$(kubectl get pod -n adp -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}'); echo \"Pod: \$POD\"; kubectl exec -n adp \$POD -- node -e \"fetch('http://adp-inventory-service:8084/api/v1/inventory/getInventoryDetails?id=test').then(r=>r.text().then(b=>console.log('NO-PREFIX:'+r.status+' '+b.slice(0,80)))).catch(e=>console.log('NO-PREFIX ERR:'+e.message))\" 2>&1 || true" || true
+            --command "POD=\$(kubectl get pod -n adp-preprod -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}'); echo \"Pod: \$POD\"; kubectl exec -n adp-preprod \$POD -- node -e \"fetch('http://adp-inventory-service:8084/api/v1/inventory/getInventoryDetails?id=test').then(r=>r.text().then(b=>console.log('NO-PREFIX:'+r.status+' '+b.slice(0,80)))).catch(e=>console.log('NO-PREFIX ERR:'+e.message))\" 2>&1 || true" || true
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "POD=\$(kubectl get pod -n adp -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}'); kubectl exec -n adp \$POD -- node -e \"fetch('http://adp-inventory-service:8084/inventory/api/v1/inventory/getInventoryDetails?id=test').then(r=>r.text().then(b=>console.log('WITH-PREFIX:'+r.status+' '+b.slice(0,80)))).catch(e=>console.log('WITH-PREFIX ERR:'+e.message))\" 2>&1 || true" || true
+            --command "POD=\$(kubectl get pod -n adp-preprod -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}'); kubectl exec -n adp-preprod \$POD -- node -e \"fetch('http://adp-inventory-service:8084/inventory/api/v1/inventory/getInventoryDetails?id=test').then(r=>r.text().then(b=>console.log('WITH-PREFIX:'+r.status+' '+b.slice(0,80)))).catch(e=>console.log('WITH-PREFIX ERR:'+e.message))\" 2>&1 || true" || true
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "POD=\$(kubectl get pod -n adp -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}'); kubectl exec -n adp \$POD -- node -e \"fetch('http://adp-authentication:8080/inventory/api/v1/inventory/getInventoryDetails?id=test').then(r=>r.text().then(b=>console.log('VIA-GATEWAY:'+r.status+' '+b.slice(0,80)))).catch(e=>console.log('VIA-GATEWAY ERR:'+e.message))\" 2>&1 || true" || true
+            --command "POD=\$(kubectl get pod -n adp-preprod -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}'); kubectl exec -n adp-preprod \$POD -- node -e \"fetch('http://adp-authentication:8080/inventory/api/v1/inventory/getInventoryDetails?id=test').then(r=>r.text().then(b=>console.log('VIA-GATEWAY:'+r.status+' '+b.slice(0,80)))).catch(e=>console.log('VIA-GATEWAY ERR:'+e.message))\" 2>&1 || true" || true
           echo "=== Real vehicle ID timing test (slug from recent pod logs) ==="
           az aks command invoke \
             --resource-group $(RESOURCE_GROUP) \
             --name $(CLUSTER_NAME) \
-            --command "POD=\$(kubectl get pod -n adp -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}'); kubectl exec -n adp \$POD -- node -e \"const t=Date.now(); fetch('http://adp-authentication:8080/inventory/api/v1/inventory/getInventoryDetails?id=69f1eb1d625a5c4401c1e20d', {signal: AbortSignal.timeout(35000)}).then(r=>r.text().then(b=>console.log('REAL-ID ms='+(Date.now()-t)+' status='+r.status+' body='+b.slice(0,200)))).catch(e=>console.log('REAL-ID ERR ms='+(Date.now()-t)+' '+e.message))\" 2>&1 || true" || true
+            --command "POD=\$(kubectl get pod -n adp-preprod -l app=adp-frontend -o jsonpath='{.items[0].metadata.name}'); kubectl exec -n adp-preprod \$POD -- node -e \"const t=Date.now(); fetch('http://adp-authentication:8080/inventory/api/v1/inventory/getInventoryDetails?id=69f1eb1d625a5c4401c1e20d', {signal: AbortSignal.timeout(35000)}).then(r=>r.text().then(b=>console.log('REAL-ID ms='+(Date.now()-t)+' status='+r.status+' body='+b.slice(0,200)))).catch(e=>console.log('REAL-ID ERR ms='+(Date.now()-t)+' '+e.message))\" 2>&1 || true" || true
           echo "=== End of diagnostics ==="
 
