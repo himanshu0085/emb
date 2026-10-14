@@ -34,11 +34,11 @@ steps:
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
           --command "
-            kubectl patch secret adp-secrets -n adp \
+            kubectl patch secret adp-secrets -n adp-preprod \
               -p '{\"stringData\":{\"ELASTICSEARCH_API_KEY\":\"$(ELASTICSEARCH_API_KEY)\"}}' && \
             echo 'Secret patched OK' && \
-            kubectl rollout restart deployment/adp-inventory -n adp && \
-            kubectl rollout restart deployment/adp-analytics -n adp && \
+            kubectl rollout restart deployment/adp-inventory -n adp-preprod && \
+            kubectl rollout restart deployment/adp-analytics -n adp-preprod && \
             echo 'Services restarted'
           "
 
@@ -59,7 +59,7 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl get pods -n adp | grep -E 'adp-inventory|adp-analytics'"
+          --command "kubectl get pods -n adp-preprod | grep -E 'adp-inventory|adp-analytics'"
 
   - task: AzureCLI@2
     displayName: 'Check inventory logs'
@@ -72,4 +72,4 @@ steps:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl logs -l app=adp-inventory -n adp --tail=50 2>&1"
+          --command "kubectl logs -l app=adp-inventory -n adp-preprod --tail=50 2>&1"
