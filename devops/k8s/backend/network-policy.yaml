@@ -15,7 +15,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-only-gateway-to-orders
-  namespace: adp
+  namespace: adp-preprod
 spec:
   podSelector:
     matchLabels:
@@ -40,7 +40,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-only-gateway-to-masters
-  namespace: adp
+  namespace: adp-preprod
 spec:
   podSelector:
     matchLabels:
@@ -67,7 +67,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-only-gateway-to-inventory
-  namespace: adp
+  namespace: adp-preprod
 spec:
   podSelector:
     matchLabels:
@@ -98,7 +98,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-only-gateway-to-analytics
-  namespace: adp
+  namespace: adp-preprod
 spec:
   podSelector:
     matchLabels:
@@ -120,7 +120,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-only-gateway-to-users
-  namespace: adp
+  namespace: adp-preprod
 spec:
   podSelector:
     matchLabels:
@@ -154,7 +154,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-only-gateway-to-chat
-  namespace: adp
+  namespace: adp-preprod
 spec:
   podSelector:
     matchLabels:
@@ -185,7 +185,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-only-gateway-to-communication
-  namespace: adp
+  namespace: adp-preprod
 spec:
   podSelector:
     matchLabels:
@@ -221,7 +221,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: deny-azure-imds-egress
-  namespace: adp
+  namespace: adp-preprod
 spec:
   podSelector: {}
   policyTypes:
