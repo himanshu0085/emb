@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: adp-discovery
-  namespace: adp
+  namespace: adp-preprod
   labels:
     app: adp-discovery
 spec:
@@ -68,7 +68,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: adp-discovery
-  namespace: adp
+  namespace: adp-preprod
 spec:
   selector:
     app: adp-discovery
