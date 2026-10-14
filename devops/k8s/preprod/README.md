@@ -1,22 +1,25 @@
-# ADP Pre-production deployment (`adp-preprod`)
+# ADP pre-production deployment (`adp-preprod`)
 
-This directory is an isolated pre-production starting point. Do not apply the current production manifests directly to `adp-preprod`: several of them contain production hostnames, production dependency endpoints, and credential-like values.
+Temporary hostname requested: `prod.globalautotrade.com`.
 
-## Implemented in this branch
+## Updated on branch `prod-v1`
 
-- `namespace.yaml` defines the dedicated `adp-preprod` namespace.
+- Namespace manifest and namespace fields in the sampled Kubernetes resources target `adp-preprod`.
+- Frontend API/WebSocket URLs and ingress host rules use `prod.globalautotrade.com`.
+- `secrets.template.yaml` contains placeholders only. Populate secrets from an approved preprod Key Vault/variable group.
+- `inject-secrets-preprod.yaml` expects an Azure DevOps variable group named `adp-secrets-preprod`.
 
-## Required before deployment
+## Do not deploy until these are confirmed
 
-1. Create and approve a pre-production Azure DevOps variable group / Key Vault scope. Do not reuse `adp-secrets-prod` without explicit security approval.
-2. Replace credential-like values in tracked Kubernetes files with placeholders and rotate any real credentials that were committed. Inject real values at deploy time from approved secret storage. Do not copy `k8s/backend/secrets.yaml` into this overlay.
-3. Provision/approve isolated database, Redis, Elasticsearch indexes/cluster, Service Bus queues/topics/subscriptions, and Blob Storage container/prefix. Current `configmap-aks.yaml` points to production dependency endpoints.
-4. Approve a temporary pre-production hostname and TLS certificate. Do not reuse or overwrite `www.globalautotrade.com`. Update frontend API/WebSocket URLs, CORS, cookie domain and auth callback URLs to match the approved hostname.
-5. Create pre-production-specific Azure DevOps pipelines or templates. Do not change existing production pipeline definitions in place. They currently reference `refs/heads/prod`, production variable groups and production ACR/AKS resources. Confirm the intended source branch and target registry/service connection before enabling deployment.
-6. Pin a unique immutable image tag/digest and verify the pipeline only applies to `adp-preprod`; add a guard that fails if the target namespace is `adp`.
-7. Add and validate pre-production-specific Deployment/Service/ConfigMap/NetworkPolicy manifests and ingress rules. Do not apply the current `k8s/ingress.yaml` to this namespace because it uses the live production hostname.
-8. Run YAML/schema validation, security/secret scanning, and review the diff before any AKS deployment.
+1. DNS for `prod.globalautotrade.com` points to the intended ingress and the TLS certificate covers this hostname.
+2. The preprod variable group/Key Vault contains only preprod credentials.
+3. Database, Redis, Elasticsearch, Service Bus and Blob Storage are isolated from live Production. Current `configmap-aks.yaml` still contains production dependency endpoints.
+4. Pipeline variable groups, ACR permissions, image tag/digest and service connection are reviewed. Several existing pipeline settings still identify Production resources.
+5. Cookie domain, auth callback URLs, CORS, WebSocket routing, ingress and application settings are validated.
+6. YAML/schema validation and secret scanning pass.
 
-## Safety status
+## Safety notes
 
-This commit only adds the namespace manifest and this implementation checklist. It does not deploy anything to AKS and does not modify the existing `adp` namespace, production ingress, or production pipelines. Hostname, secret scope, database/dependency isolation, and target ACR/pipeline service connection are not known yet, so a complete deployable pre-production pipeline cannot safely be inferred from repository contents alone.
+The original `deploy/azurepipeline/inject-secrets.yaml`, `deploy/azurepipeline/rollback-prod.yml`, and `k8s/backend/secrets.yaml` remain production-oriented. Do not run/apply them for preprod. Service identifiers such as `adp-authentication` remain unchanged intentionally; they are service names, not namespace names.
+
+No AKS deployment or DNS/TLS change has been performed by these Git commits.
