@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: adp-communication
-  namespace: adp
+  namespace: adp-preprod
   labels:
     app: adp-communication
 spec:
@@ -114,7 +114,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: adp-communication-service
-  namespace: adp
+  namespace: adp-preprod
 spec:
   selector:
     app: adp-communication
