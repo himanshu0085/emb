@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: adp-orders
-  namespace: adp
+  namespace: adp-preprod
   labels:
     app: adp-orders
 spec:
@@ -100,7 +100,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: adp-orders-service
-  namespace: adp
+  namespace: adp-preprod
 spec:
   selector:
     app: adp-orders
