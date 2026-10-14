@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: adp-users
-  namespace: adp
+  namespace: adp-preprod
   labels:
     app: adp-users
 spec:
@@ -123,7 +123,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: adp-users-service
-  namespace: adp
+  namespace: adp-preprod
 spec:
   selector:
     app: adp-users
