@@ -165,7 +165,7 @@ jobs:
         az aks command invoke \
           --resource-group $(RESOURCE_GROUP) \
           --name $(CLUSTER_NAME) \
-          --command "kubectl rollout restart deployment/$(SERVICE_NAME) -n adp && kubectl rollout status deployment/$(SERVICE_NAME) -n adp --timeout=300s"
+          --command "kubectl rollout restart deployment/$(SERVICE_NAME) -n adp-preprod && kubectl rollout status deployment/$(SERVICE_NAME) -n adp-preprod --timeout=300s"
         echo "✅ $(SERVICE_NAME):$(Build.BuildId) deployed to Production"
 
   - task: AzureCLI@2
@@ -177,4 +177,4 @@ jobs:
       inlineScript: |
         set -e
         sleep 120
-        echo "✅ $(SERVICE_NAME):$(Build.BuildId) deployed — verify pods via: kubectl get pods -n adp"
+        echo "✅ $(SERVICE_NAME):$(Build.BuildId) deployed — verify pods via: kubectl get pods -n adp-preprod"
