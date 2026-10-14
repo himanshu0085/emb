@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: adp-chat
-  namespace: adp
+  namespace: adp-preprod
   labels:
     app: adp-chat
 spec:
@@ -148,7 +148,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: adp-chat-service
-  namespace: adp
+  namespace: adp-preprod
 spec:
   selector:
     app: adp-chat
