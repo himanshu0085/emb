@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: adp-frontend
-  namespace: adp
+  namespace: adp-preprod
   labels:
     app: adp-frontend
 spec:
@@ -29,9 +29,9 @@ spec:
             - name: INTERNAL_API_DOMAIN
               value: "http://adp-authentication:8080"
             - name: NEXT_PUBLIC_API_DOMAIN
-              value: "https://www.globalautotrade.com"
+              value: "https://prod.globalautotrade.com"
             - name: NEXT_PUBLIC_WS_DOMAIN
-              value: "wss://www.globalautotrade.com/chat/ws"
+              value: "wss://prod.globalautotrade.com/chat/ws"
           resources:
             requests:
               memory: "256Mi"
@@ -57,7 +57,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: adp-frontend
-  namespace: adp
+  namespace: adp-preprod
 spec:
   type: NodePort
   selector:
