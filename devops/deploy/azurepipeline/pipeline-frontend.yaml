@@ -26,9 +26,9 @@ variables:
   - name: CLUSTER_NAME
     value: az-automotivemarketplace-pr-uaen-aks
   - name: API_DOMAIN
-    value: 'https://prod.globalautotrade.com'
+    value: 'https://www.globalautotrade.com'
   - name: WS_DOMAIN
-    value: 'wss://prod.globalautotrade.com/chat/ws'
+    value: 'wss://www.globalautotrade.com/chat/ws'
   - name: RECAPTCHA_SITE_KEY
     value: '6LcZoggtAAAAADGx0ps1NRTsbTp7VlUYda8kHqFD'
   # INTERNAL_API_DOMAIN — hairpin NAT fix.
